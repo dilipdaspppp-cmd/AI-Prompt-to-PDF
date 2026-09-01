@@ -153,7 +153,6 @@ class MainActivity : Activity() {
     }
 
     private fun addNewTurn() {
-        // টেক্সট হুবহু রাখা হয়েছে — কোনো trim করা হয়নি, যাতে স্পেস/ইনডেন্টেশন/লাইন ব্রেক অক্ষত থাকে
         val prompt = promptInput.text.toString()
         val response = responseInput.text.toString()
         if (prompt.isEmpty() && response.isEmpty() && currentImages.isEmpty()) {
@@ -191,7 +190,6 @@ class MainActivity : Activity() {
             var part = parts[i]
             if (part.isEmpty()) continue
             if (i % 2 == 1) {
-                // কোড ব্লক — প্রথম লাইনে ভাষার নাম (যেমন kotlin, python) থাকলে বাদ দেওয়া হচ্ছে
                 val nl = part.indexOf("\n")
                 if (nl > 0) {
                     val firstLine = part.substring(0, nl).trim()
@@ -249,16 +247,41 @@ class MainActivity : Activity() {
             y += layout.height + 10f
         }
 
-        // বর্ডারসহ একটি সেকশন আঁকে; পেজ বদলালে বর্ডার আগের পেজে বন্ধ করে নতুন পেজে আবার শুরু করে
-        fun drawSection(segments: List<Segment>, basePaint: TextPaint, borderPaint: Paint) {
+        // আপডেট করা ফাংশন: এখানে এখন টাইটেল এবং ছবি আঁকা হচ্ছে
+        fun drawSection(
+            segments: List<Segment>,
+            basePaint: TextPaint,
+            borderPaint: Paint,
+            sectionTitle: String? = null,
+            images: List<Bitmap> = emptyList()
+        ) {
             var sectionTop = y
             var hasContent = false
 
+            // ১. সেকশনের টাইটেল (যেমন: User Prompt বা AI Response) আঁকা
+            if (sectionTitle != null) {
+                val titleLayout = makeLayout(sectionTitle, titlePaint, CONTENT_W - 2 * PAD)
+                val titleH = titleLayout.height + PAD
+                
+                if (y + titleH > PAGE_H - MARGIN) {
+                    newPage()
+                    sectionTop = y
+                }
+                
+                canvas.save()
+                canvas.translate((MARGIN + PAD).toFloat(), y + PAD/2)
+                titleLayout.draw(canvas)
+                canvas.restore()
+                y += titleH
+                hasContent = true
+            }
+
+            // ২. টেক্সট বা কোড আঁকা
             for (seg in segments) {
+                if (seg.text.isBlank()) continue // ফাঁকা থাকলে আঁকবে না
+                
                 val paint = if (seg.isCode) codePaint else basePaint
                 val bg = if (seg.isCode) codeBgPaint else null
-                // লাইন ধরে ধরে আঁকা হচ্ছে যাতে পেজিনেশন নিরাপদ থাকে;
-                // লম্বা লাইন StaticLayout দিয়ে র‍্যাপ হয়, ডানদিকে কাটে না
                 val lines = seg.text.split("\n")
                 for (ln in lines) {
                     val shown = if (ln.isEmpty()) " " else ln
@@ -291,6 +314,47 @@ class MainActivity : Activity() {
                 }
             }
 
+            // ৩. ছবিগুলো সেকশনের ভেতরেই আঁকা (নির্দিষ্ট সাইজে রিসাইজ করে যাতে কাটে না)
+            for (bmp in images) {
+                if (bmp.width <= 0 || bmp.height <= 0) continue
+                
+                // নির্দিষ্ট মাপের ভেতর রাখার জন্য ম্যাক্সিমাম সাইজ
+                val MAX_IMG_W = (CONTENT_W * 0.85).toInt()
+                val MAX_IMG_H = (PAGE_H / 3).toInt() 
+                
+                var w = bmp.width
+                var h = bmp.height
+                
+                // Aspect ratio বজায় রেখে রিসাইজ করা
+                val ratioW = MAX_IMG_W.toFloat() / w
+                val ratioH = MAX_IMG_H.toFloat() / h
+                val ratio = minOf(ratioW, ratioH)
+                
+                if (ratio < 1.0f) {
+                    w = (w * ratio).toInt()
+                    h = (h * ratio).toInt()
+                }
+                
+                val imgH = h + 2 * PAD
+                if (y + imgH > PAGE_H - MARGIN) {
+                    if (hasContent) {
+                        canvas.drawRect(
+                            MARGIN.toFloat(), sectionTop,
+                            (MARGIN + CONTENT_W).toFloat(), y, borderPaint
+                        )
+                    }
+                    newPage()
+                    sectionTop = y
+                }
+                
+                val left = MARGIN + (CONTENT_W - w) / 2
+                val dest = RectF(left.toFloat(), y + PAD, (left + w).toFloat(), y + PAD + h)
+                canvas.drawBitmap(bmp, null, dest, null)
+                y += imgH
+                hasContent = true
+            }
+
+            // ৪. সেকশনের বর্ডার আঁকা
             if (hasContent) {
                 canvas.drawRect(
                     MARGIN.toFloat(), sectionTop,
@@ -299,32 +363,11 @@ class MainActivity : Activity() {
                 y += GAP
             }
         }
-
-        fun drawImages(bitmaps: List<Bitmap>) {
-            for (bmp in bitmaps) {
-                if (bmp.width <= 0 || bmp.height <= 0) continue
-                // পেজের প্রস্থ অনুযায়ী স্বয়ংক্রিয় রিসাইজ
-                var w = CONTENT_W
-                var h = (bmp.height * (CONTENT_W.toFloat() / bmp.width)).toInt()
-                val maxH = PAGE_H - 2 * MARGIN
-                if (h > maxH) {
-                    val s = maxH.toFloat() / h
-                    h = maxH
-                    w = (w * s).toInt()
-                }
-                ensureSpace(h.toFloat())
-                val left = MARGIN + (CONTENT_W - w) / 2
-                val dest = RectF(left.toFloat(), y, (left + w).toFloat(), y + h)
-                canvas.drawBitmap(bmp, null, dest, null)
-                y += h + GAP
-            }
-        }
     }
 
     private fun generatePdf() {
         val allTurns = ArrayList(turns)
 
-        // শেষবারের ইনপুট Add New Turn না চাপলেও PDF-এ যুক্ত হবে
         val curPrompt = promptInput.text.toString()
         val curResponse = responseInput.text.toString()
         if (curPrompt.isNotEmpty() || curResponse.isNotEmpty() || currentImages.isNotEmpty()) {
@@ -342,14 +385,25 @@ class MainActivity : Activity() {
         for ((index, turn) in allTurns.withIndex()) {
             renderer.drawTitle("Turn " + (index + 1))
 
-            if (turn.prompt.isNotEmpty()) {
-                renderer.drawSection(listOf(Segment(turn.prompt, false)), promptPaint, redBorder)
+            // User Prompt সেকশন (লেখা এবং ছবি একসাথে একই লাল বর্ডারের ভেতর)
+            if (turn.prompt.isNotBlank() || turn.images.isNotEmpty()) {
+                renderer.drawSection(
+                    segments = listOf(Segment(turn.prompt, false)),
+                    basePaint = promptPaint,
+                    borderPaint = redBorder,
+                    sectionTitle = "User Prompt",
+                    images = turn.images
+                )
             }
-            if (turn.images.isNotEmpty()) {
-                renderer.drawImages(turn.images)
-            }
-            if (turn.response.isNotEmpty()) {
-                renderer.drawSection(parseSegments(turn.response), responsePaint, blueBorder)
+            
+            // AI Response সেকশন
+            if (turn.response.isNotBlank()) {
+                renderer.drawSection(
+                    segments = parseSegments(turn.response),
+                    basePaint = responsePaint,
+                    borderPaint = blueBorder,
+                    sectionTitle = "AI Response"
+                )
             }
         }
 
@@ -364,7 +418,6 @@ class MainActivity : Activity() {
 
         try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                // Android Q+ : MediaStore API দিয়ে পাবলিক Downloads ফোল্ডারে সেভ
                 val values = ContentValues()
                 values.put(MediaStore.MediaColumns.DISPLAY_NAME, fileName)
                 values.put(MediaStore.MediaColumns.MIME_TYPE, "application/pdf")
@@ -380,7 +433,6 @@ class MainActivity : Activity() {
                     Toast.makeText(this, "PDF সেভ ব্যর্থ হয়েছে", Toast.LENGTH_LONG).show()
                 }
             } else {
-                // Android 9 বা তার নিচে
                 val dir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
                 if (!dir.exists()) dir.mkdirs()
                 val file = File(dir, fileName)
