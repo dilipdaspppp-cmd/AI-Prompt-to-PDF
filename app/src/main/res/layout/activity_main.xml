@@ -75,7 +75,7 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="10dp"
-            android:text="Add New Turn" />
+            android:text="Add New Conversation" />
 
         <LinearLayout
             android:id="@+id/turnsContainer"
