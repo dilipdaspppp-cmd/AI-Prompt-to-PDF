@@ -85,19 +85,19 @@
             android:paddingTop="6dp" />
 
         <Button
+            android:id="@+id/deleteAllButton"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="10dp"
+            android:text="Delete All Conversations" />
+
+        <Button
             android:id="@+id/generateHtmlButton"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="16dp"
-            android:layout_marginBottom="8dp"
-            android:text="Generate HTML (AI Safe)" />
-
-        <Button
-            android:id="@+id/generatePdfButton"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
             android:layout_marginBottom="24dp"
-            android:text="Generate PDF" />
+            android:text="Generate HTML (AI Safe)" />
 
     </LinearLayout>
 </ScrollView>
