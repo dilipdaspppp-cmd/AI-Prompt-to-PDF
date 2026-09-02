@@ -40,6 +40,11 @@ class MainActivity : Activity() {
         val images: List<Bitmap>
     )
 
+    data class Segment(
+        val text: String,
+        val isCode: Boolean
+    )
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
@@ -152,7 +157,7 @@ class MainActivity : Activity() {
     }
 
     //==========================================
-    // HTML Export — AI-safe, code অক্ষত থাকবে
+    // HTML Export — AI-safe, কপি বাটনসহ
     //==========================================
     private fun escapeHtml(text: String): String {
         return text
@@ -161,6 +166,17 @@ class MainActivity : Activity() {
             .replace(">", "&gt;")
             .replace("\"", "&quot;")
             .replace("'", "&#39;")
+    }
+
+    private fun parseSegments(response: String): List<Segment> {
+        val result = ArrayList<Segment>()
+        val parts = response.split("```")
+        for (i in parts.indices) {
+            val part = parts[i]
+            if (part.isEmpty()) continue
+            result.add(Segment(part, i % 2 == 1))
+        }
+        return result
     }
 
     private fun bitmapToBase64(bmp: Bitmap): String {
@@ -230,13 +246,22 @@ class MainActivity : Activity() {
         sb.append(".turn{background:#fff;border:1px solid #ddd;border-radius:12px;padding:14px;margin-bottom:45px;}\n")
         sb.append(".turn h2{margin:0 0 12px 0;font-size:18px;color:#333;}\n")
         sb.append(".prompt-box{border:2px solid #d32f2f;border-radius:10px;padding:10px;margin-bottom:14px;background:#FFEBEE;}\n")
-        sb.append(".prompt-box h3{margin:0 0 8px 0;color:#d32f2f;font-size:15px;}\n")
-        sb.append(".prompt-text{color:#d32f2f;}\n")
         sb.append(".response-box{border:2px solid #1565c0;border-radius:10px;padding:10px;background:#E3F2FD;}\n")
-        sb.append(".response-box h3{margin:0 0 8px 0;color:#1565c0;font-size:15px;}\n")
-        sb.append(".response-text{color:#1565c0;}\n")
+        sb.append(".prompt-box h3{color:#d32f2f;font-size:15px;}\n")
+        sb.append(".response-box h3{color:#1565c0;font-size:15px;}\n")
+        sb.append(".box-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;}\n")
+        sb.append(".box-head h3{margin:0;}\n")
+        sb.append(".copy-btn{border:none;background:#333;color:#fff;border-radius:6px;padding:6px 12px;font-size:12px;cursor:pointer;}\n")
+        sb.append(".copy-btn:active{background:#555;}\n")
         sb.append("pre{white-space:pre-wrap;word-wrap:break-word;font-family:monospace;font-size:13px;line-height:1.5;margin:0;padding:10px;background:#ffffff;border-radius:8px;border:1px solid #e0e0e0;overflow-x:auto;}\n")
+        sb.append(".prompt-text{color:#d32f2f;}\n")
+        sb.append(".response-text{color:#1565c0;}\n")
+        sb.append(".code-block{margin:10px 0;border-radius:8px;overflow:hidden;border:1px solid #444;}\n")
+        sb.append(".code-head{display:flex;justify-content:space-between;align-items:center;background:#1e1e1e;color:#9cdcfe;padding:6px 10px;font-size:12px;font-family:monospace;}\n")
+        sb.append(".code-head .copy-btn{background:#3c3c3c;}\n")
+        sb.append("pre.code-text{background:#2d2d2d;color:#e6e6e6;border:none;border-radius:0;}\n")
         sb.append("img{display:block;max-width:100%;height:auto;max-height:520px;object-fit:contain;margin:12px auto;border:1px solid #bbb;border-radius:8px;background:#fff;padding:4px;}\n")
+        sb.append("#copyToast{display:none;position:fixed;bottom:20px;left:50%;transform:translateX(-50%);background:#333;color:#fff;padding:10px 20px;border-radius:24px;font-size:14px;z-index:999;}\n")
         sb.append("</style>\n")
         sb.append("</head>\n")
         sb.append("<body>\n")
@@ -245,12 +270,18 @@ class MainActivity : Activity() {
         sb.append("<p class=\"meta\">Generated: ").append(escapeHtml(dateStr)).append("</p>\n")
 
         for ((index, turn) in allTurns.withIndex()) {
+            val tId = index + 1
             sb.append("<div class=\"turn\">\n")
-            sb.append("<h2>Conversation ").append(index + 1).append("</h2>\n")
+            sb.append("<h2>Conversation ").append(tId).append("</h2>\n")
 
             if (turn.prompt.isNotEmpty() || turn.images.isNotEmpty()) {
                 sb.append("<div class=\"prompt-box\">\n")
+                sb.append("<div class=\"box-head\">\n")
                 sb.append("<h3>User Prompt</h3>\n")
+                if (turn.prompt.isNotEmpty()) {
+                    sb.append("<button class=\"copy-btn\" onclick=\"copyEl(this,'p").append(tId).append("')\">📋 Copy</button>\n")
+                }
+                sb.append("</div>\n")
 
                 for (bmp in turn.images) {
                     val base64Image = bitmapToBase64(bmp)
@@ -262,7 +293,7 @@ class MainActivity : Activity() {
                 }
 
                 if (turn.prompt.isNotEmpty()) {
-                    sb.append("<pre class=\"prompt-text\">")
+                    sb.append("<pre id=\"p").append(tId).append("\" class=\"prompt-text\">")
                     sb.append(escapeHtml(turn.prompt))
                     sb.append("</pre>\n")
                 }
@@ -271,14 +302,50 @@ class MainActivity : Activity() {
 
             if (turn.response.isNotEmpty()) {
                 sb.append("<div class=\"response-box\">\n")
+                sb.append("<div class=\"box-head\">\n")
                 sb.append("<h3>AI Response</h3>\n")
-                sb.append("<pre class=\"response-text\">")
+                sb.append("<button class=\"copy-btn\" onclick=\"copyEl(this,'r").append(tId).append("')\">📋 Copy Full Response</button>\n")
+                sb.append("</div>\n")
+
+                sb.append("<pre id=\"r").append(tId).append("\" style=\"display:none\">")
                 sb.append(escapeHtml(turn.response))
                 sb.append("</pre>\n")
+
+                val segments = parseSegments(turn.response)
+                var codeCounter = 0
+                for (seg in segments) {
+                    val clean = seg.text.trim('\n')
+                    if (clean.isBlank()) continue
+                    if (seg.isCode) {
+                        codeCounter++
+                        val cId = "c" + tId + "_" + codeCounter
+                        sb.append("<div class=\"code-block\">\n")
+                        sb.append("<div class=\"code-head\"><span>CODE</span><button class=\"copy-btn\" onclick=\"copyEl(this,'").append(cId).append("')\">📋 Copy</button></div>\n")
+                        sb.append("<pre id=\"").append(cId).append("\" class=\"code-text\">")
+                        sb.append(escapeHtml(clean))
+                        sb.append("</pre>\n")
+                        sb.append("</div>\n")
+                    } else {
+                        sb.append("<pre class=\"response-text\">")
+                        sb.append(escapeHtml(clean))
+                        sb.append("</pre>\n")
+                    }
+                }
                 sb.append("</div>\n")
             }
             sb.append("</div>\n")
         }
+
+        sb.append("<div id=\"copyToast\">✅ কপি হয়েছে!</div>\n")
+        sb.append("<script>\n")
+        sb.append("function copyEl(btn,id){var el=document.getElementById(id);if(!el)return;doCopy(el.textContent,btn);}\n")
+        sb.append("function doCopy(text,btn){function ok(){showToast();if(btn){var old=btn.textContent;btn.textContent='✅ Copied!';setTimeout(function(){btn.textContent=old;},1500);}}\n")
+        sb.append("if(navigator.clipboard&&navigator.clipboard.writeText){navigator.clipboard.writeText(text).then(ok,function(){legacy(text);ok();});}else{legacy(text);ok();}}\n")
+        sb.append("function legacy(text){var ta=document.createElement('textarea');ta.value=text;ta.setAttribute('readonly','');ta.style.position='fixed';ta.style.top='-1000px';document.body.appendChild(ta);ta.select();ta.setSelectionRange(0,text.length);try{document.execCommand('copy');}catch(e){}\n")
+        sb.append("document.body.removeChild(ta);}\n")
+        sb.append("var toastTimer=null;\n")
+        sb.append("function showToast(){var t=document.getElementById('copyToast');if(!t)return;t.style.display='block';if(toastTimer)clearTimeout(toastTimer);toastTimer=setTimeout(function(){t.style.display='none';},1500);}\n")
+        sb.append("</script>\n")
         sb.append("</body>\n")
         sb.append("</html>\n")
         saveHtml(sb.toString())
