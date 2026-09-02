@@ -46,11 +46,6 @@ class MainActivity : Activity() {
         val images: List<Bitmap>
     )
 
-    data class Segment(
-        val text: String,
-        val isCode: Boolean
-    )
-
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
@@ -244,7 +239,7 @@ class MainActivity : Activity() {
     }
 
     //==========================================
-    // HTML Export — AI-safe, কপি বাটনসহ
+    // HTML Export — AI-safe, অক্ষত কপি
     //==========================================
     private fun escapeHtml(text: String): String {
         return text
@@ -253,17 +248,6 @@ class MainActivity : Activity() {
             .replace(">", "&gt;")
             .replace("\"", "&quot;")
             .replace("'", "&#39;")
-    }
-
-    private fun parseSegments(response: String): List<Segment> {
-        val result = ArrayList<Segment>()
-        val parts = response.split("```")
-        for (i in parts.indices) {
-            val part = parts[i]
-            if (part.isEmpty()) continue
-            result.add(Segment(part, i % 2 == 1))
-        }
-        return result
     }
 
     private fun bitmapToBase64(bmp: Bitmap): String {
@@ -338,10 +322,6 @@ class MainActivity : Activity() {
         sb.append("pre{white-space:pre-wrap;word-wrap:break-word;font-family:monospace;font-size:13px;line-height:1.5;margin:0;padding:10px;background:#ffffff;border-radius:8px;border:1px solid #e0e0e0;overflow-x:auto;}\n")
         sb.append(".prompt-text{color:#d32f2f;}\n")
         sb.append(".response-text{color:#1565c0;}\n")
-        sb.append(".code-block{margin:10px 0;border-radius:8px;overflow:hidden;border:1px solid #444;}\n")
-        sb.append(".code-head{display:flex;justify-content:space-between;align-items:center;background:#1e1e1e;color:#9cdcfe;padding:6px 10px;font-size:12px;font-family:monospace;}\n")
-        sb.append(".code-head .copy-btn{background:#3c3c3c;}\n")
-        sb.append("pre.code-text{background:#2d2d2d;color:#e6e6e6;border:none;border-radius:0;}\n")
         sb.append("img{display:block;max-width:100%;height:auto;max-height:520px;object-fit:contain;margin:12px auto;border:1px solid #bbb;border-radius:8px;background:#fff;padding:4px;}\n")
         sb.append("#copyToast{display:none;position:fixed;bottom:20px;left:50%;transform:translateX(-50%);background:#333;color:#fff;padding:10px 20px;border-radius:24px;font-size:14px;z-index:999;}\n")
         sb.append("</style>\n")
@@ -388,31 +368,9 @@ class MainActivity : Activity() {
                 sb.append("<h3>AI Response</h3>\n")
                 sb.append("<button class=\"copy-btn\" onclick=\"copyEl(this,'r").append(tId).append("')\">📋 Copy Full Response</button>\n")
                 sb.append("</div>\n")
-
-                sb.append("<pre id=\"r").append(tId).append("\" style=\"display:none\">")
+                sb.append("<pre id=\"r").append(tId).append("\" class=\"response-text\">")
                 sb.append(escapeHtml(turn.response))
                 sb.append("</pre>\n")
-
-                val segments = parseSegments(turn.response)
-                var codeCounter = 0
-                for (seg in segments) {
-                    val clean = seg.text.trim('\n')
-                    if (clean.isBlank()) continue
-                    if (seg.isCode) {
-                        codeCounter++
-                        val cId = "c" + tId + "_" + codeCounter
-                        sb.append("<div class=\"code-block\">\n")
-                        sb.append("<div class=\"code-head\"><span>CODE</span><button class=\"copy-btn\" onclick=\"copyEl(this,'").append(cId).append("')\">📋 Copy</button></div>\n")
-                        sb.append("<pre id=\"").append(cId).append("\" class=\"code-text\">")
-                        sb.append(escapeHtml(clean))
-                        sb.append("</pre>\n")
-                        sb.append("</div>\n")
-                    } else {
-                        sb.append("<pre class=\"response-text\">")
-                        sb.append(escapeHtml(clean))
-                        sb.append("</pre>\n")
-                    }
-                }
                 sb.append("</div>\n")
             }
             sb.append("</div>\n")
