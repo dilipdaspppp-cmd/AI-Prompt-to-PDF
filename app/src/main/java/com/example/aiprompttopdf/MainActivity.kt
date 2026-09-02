@@ -33,17 +33,13 @@ import java.util.Date
 import java.util.Locale
 
 class MainActivity : Activity() {
-
     private lateinit var promptInput: EditText
     private lateinit var responseInput: EditText
     private lateinit var turnsContainer: LinearLayout
     private lateinit var imageLabel: TextView
-
     private val currentImages = ArrayList<Bitmap>()
     private val turns = ArrayList<ChatTurn>()
-
     private val PICK_IMAGE = 101
-
     private val PAGE_W = 595
     private val PAGE_H = 842
     private val MARGIN = 40
@@ -94,6 +90,16 @@ class MainActivity : Activity() {
         style = Paint.Style.FILL
     }
 
+    private val promptBgPaint = Paint().apply {
+        color = Color.parseColor("#FFEBEE")
+        style = Paint.Style.FILL
+    }
+
+    private val responseBgPaint = Paint().apply {
+        color = Color.parseColor("#E3F2FD")
+        style = Paint.Style.FILL
+    }
+
     private val redBorder = Paint().apply {
         color = Color.RED
         style = Paint.Style.STROKE
@@ -109,7 +115,6 @@ class MainActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
-
         promptInput = findViewById(R.id.promptInput)
         responseInput = findViewById(R.id.responseInput)
         turnsContainer = findViewById(R.id.turnsContainer)
@@ -121,15 +126,12 @@ class MainActivity : Activity() {
             intent.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true)
             startActivityForResult(Intent.createChooser(intent, "ছবি নির্বাচন করুন"), PICK_IMAGE)
         }
-
         findViewById<Button>(R.id.addTurnButton).setOnClickListener {
             addNewTurn()
         }
-
         findViewById<Button>(R.id.generateHtmlButton).setOnClickListener {
             generateHtml()
         }
-
         findViewById<Button>(R.id.generatePdfButton).setOnClickListener {
             generatePdf()
         }
@@ -165,12 +167,10 @@ class MainActivity : Activity() {
     private fun addNewTurn() {
         val prompt = promptInput.text.toString()
         val response = responseInput.text.toString()
-
         if (prompt.isEmpty() && response.isEmpty() && currentImages.isEmpty()) {
             Toast.makeText(this, "প্রম্পট বা উত্তর লিখুন", Toast.LENGTH_SHORT).show()
             return
         }
-
         turns.add(ChatTurn(prompt, response, ArrayList(currentImages)))
         currentImages.clear()
 
@@ -186,10 +186,6 @@ class MainActivity : Activity() {
         Toast.makeText(this, "টার্ন যোগ হয়েছে। মোট: " + turns.size, Toast.LENGTH_SHORT).show()
     }
 
-    //==========================================
-    // HTML Export — AI-safe, code অক্ষত থাকবে
-    //==========================================
-
     private fun escapeHtml(text: String): String {
         return text
             .replace("&", "&amp;")
@@ -203,49 +199,37 @@ class MainActivity : Activity() {
         return try {
             var w = bmp.width
             var h = bmp.height
-
             if (w <= 0 || h <= 0) return ""
-
             val MAX_W = 1000
             val MAX_H = 1400
-
             var scale = 1f
-
             if (w > MAX_W) {
                 scale = MAX_W.toFloat() / w
             }
-
             if (h > MAX_H) {
                 val heightScale = MAX_H.toFloat() / h
                 if (heightScale < scale) scale = heightScale
             }
-
             if (scale < 1f) {
                 w = (w * scale).toInt()
                 h = (h * scale).toInt()
             }
-
             val scaled = if (w == bmp.width && h == bmp.height) {
                 bmp
             } else {
                 Bitmap.createScaledBitmap(bmp, w, h, true)
             }
-
             val whiteBackground = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
             val canvas = Canvas(whiteBackground)
             canvas.drawColor(Color.WHITE)
             canvas.drawBitmap(scaled, 0f, 0f, null)
-
             val stream = ByteArrayOutputStream()
             whiteBackground.compress(Bitmap.CompressFormat.JPEG, 85, stream)
-
             val encoded = Base64.encodeToString(stream.toByteArray(), Base64.NO_WRAP)
-
             if (scaled !== bmp) {
                 scaled.recycle()
             }
             whiteBackground.recycle()
-
             encoded
         } catch (e: Exception) {
             ""
@@ -254,21 +238,17 @@ class MainActivity : Activity() {
 
     private fun generateHtml() {
         val allTurns = ArrayList(turns)
-
         val curPrompt = promptInput.text.toString()
         val curResponse = responseInput.text.toString()
-
         if (curPrompt.isNotEmpty() || curResponse.isNotEmpty() || currentImages.isNotEmpty()) {
             allTurns.add(ChatTurn(curPrompt, curResponse, ArrayList(currentImages)))
         }
-
         if (allTurns.isEmpty()) {
             Toast.makeText(this, "HTML বানানোর মতো কোনো ডেটা নেই", Toast.LENGTH_SHORT).show()
             return
         }
 
         val sb = StringBuilder()
-
         sb.append("<!DOCTYPE html>\n")
         sb.append("<html lang=\"bn\">\n")
         sb.append("<head>\n")
@@ -281,18 +261,18 @@ class MainActivity : Activity() {
         sb.append(".meta{font-size:12px;color:#555;margin-top:0;margin-bottom:18px;}\n")
         sb.append(".turn{background:#fff;border:1px solid #ddd;border-radius:12px;padding:14px;margin-bottom:20px;}\n")
         sb.append(".turn h2{margin:0 0 12px 0;font-size:18px;color:#333;}\n")
-        sb.append(".prompt-box{border:2px solid #d32f2f;border-radius:10px;padding:10px;margin-bottom:14px;background:#fff7f7;}\n")
+        sb.append(".prompt-box{border:2px solid #d32f2f;border-radius:10px;padding:10px;margin-bottom:14px;background:#FFEBEE;}\n")
         sb.append(".prompt-box h3{margin:0 0 8px 0;color:#d32f2f;font-size:15px;}\n")
-        sb.append(".response-box{border:2px solid #1565c0;border-radius:10px;padding:10px;background:#f5f9ff;}\n")
+        sb.append(".prompt-text{color:#d32f2f;}\n")
+        sb.append(".response-box{border:2px solid #1565c0;border-radius:10px;padding:10px;background:#E3F2FD;}\n")
         sb.append(".response-box h3{margin:0 0 8px 0;color:#1565c0;font-size:15px;}\n")
+        sb.append(".response-text{color:#1565c0;}\n")
         sb.append("pre{white-space:pre-wrap;word-wrap:break-word;font-family:monospace;font-size:13px;line-height:1.5;margin:0;padding:10px;background:#ffffff;border-radius:8px;border:1px solid #e0e0e0;overflow-x:auto;}\n")
         sb.append("img{display:block;max-width:100%;height:auto;max-height:520px;object-fit:contain;margin:12px auto;border:1px solid #bbb;border-radius:8px;background:#fff;padding:4px;}\n")
         sb.append("</style>\n")
         sb.append("</head>\n")
         sb.append("<body>\n")
-
         sb.append("<h1>AI Chat Export</h1>\n")
-
         val dateStr = SimpleDateFormat("dd MMM yyyy, hh:mm a", Locale.getDefault()).format(Date())
         sb.append("<p class=\"meta\">Generated: ").append(escapeHtml(dateStr)).append("</p>\n")
 
@@ -303,13 +283,7 @@ class MainActivity : Activity() {
             if (turn.prompt.isNotEmpty() || turn.images.isNotEmpty()) {
                 sb.append("<div class=\"prompt-box\">\n")
                 sb.append("<h3>User Prompt</h3>\n")
-
-                if (turn.prompt.isNotEmpty()) {
-                    sb.append("<pre class=\"prompt-text\">")
-                    sb.append(escapeHtml(turn.prompt))
-                    sb.append("</pre>\n")
-                }
-
+                
                 for (bmp in turn.images) {
                     val base64Image = bitmapToBase64(bmp)
                     if (base64Image.isNotEmpty()) {
@@ -318,7 +292,12 @@ class MainActivity : Activity() {
                         sb.append("\" alt=\"Prompt image\">\n")
                     }
                 }
-
+                
+                if (turn.prompt.isNotEmpty()) {
+                    sb.append("<pre class=\"prompt-text\">")
+                    sb.append(escapeHtml(turn.prompt))
+                    sb.append("</pre>\n")
+                }
                 sb.append("</div>\n")
             }
 
@@ -330,27 +309,22 @@ class MainActivity : Activity() {
                 sb.append("</pre>\n")
                 sb.append("</div>\n")
             }
-
             sb.append("</div>\n")
         }
-
         sb.append("</body>\n")
         sb.append("</html>\n")
-
         saveHtml(sb.toString())
     }
 
     private fun saveHtml(html: String) {
         val timeStamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(Date())
         val fileName = "AI_Chat_" + timeStamp + ".html"
-
         try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                 val values = ContentValues()
                 values.put(MediaStore.MediaColumns.DISPLAY_NAME, fileName)
                 values.put(MediaStore.MediaColumns.MIME_TYPE, "text/html")
                 values.put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS)
-
                 val uri = contentResolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
                 if (uri != null) {
                     contentResolver.openOutputStream(uri)?.use { out ->
@@ -371,10 +345,6 @@ class MainActivity : Activity() {
             Toast.makeText(this, "Error: " + e.message, Toast.LENGTH_LONG).show()
         }
     }
-
-    //==========================================
-    // PDF Generation — আগের মতো থাকছে
-    //==========================================
 
     private fun makeLayout(text: String, paint: TextPaint, width: Int): StaticLayout {
         return StaticLayout.Builder.obtain(text, 0, text.length, paint, width)
@@ -441,6 +411,7 @@ class MainActivity : Activity() {
             segments: List<Segment>,
             basePaint: TextPaint,
             borderPaint: Paint,
+            bgPaint: Paint,
             sectionTitle: String? = null,
             images: List<Bitmap> = emptyList()
         ) {
@@ -450,12 +421,10 @@ class MainActivity : Activity() {
             if (sectionTitle != null) {
                 val titleLayout = makeLayout(sectionTitle, titlePaint, CONTENT_W - 2 * PAD)
                 val titleH = titleLayout.height + PAD
-
                 if (y + titleH > PAGE_H - MARGIN) {
                     newPage()
                     sectionTop = y
                 }
-
                 canvas.save()
                 canvas.translate((MARGIN + PAD).toFloat(), y + PAD / 2)
                 titleLayout.draw(canvas)
@@ -464,36 +433,55 @@ class MainActivity : Activity() {
                 hasContent = true
             }
 
+            for (bmp in images) {
+                if (bmp.width <= 0 || bmp.height <= 0) continue
+                val MAX_IMG_W = (CONTENT_W * 0.85).toInt()
+                val MAX_IMG_H = (PAGE_H / 3).toInt()
+                var w = bmp.width
+                var h = bmp.height
+                val ratioW = MAX_IMG_W.toFloat() / w
+                val ratioH = MAX_IMG_H.toFloat() / h
+                val ratio = if (ratioW < ratioH) ratioW else ratioH
+                if (ratio < 1.0f) {
+                    w = (w * ratio).toInt()
+                    h = (h * ratio).toInt()
+                }
+                val imgH = h + 2 * PAD
+                if (y + imgH > PAGE_H - MARGIN) {
+                    if (hasContent) {
+                        canvas.drawRect(MARGIN.toFloat(), sectionTop, (MARGIN + CONTENT_W).toFloat(), y, bgPaint)
+                        canvas.drawRect(MARGIN.toFloat(), sectionTop, (MARGIN + CONTENT_W).toFloat(), y, borderPaint)
+                    }
+                    newPage()
+                    sectionTop = y
+                }
+                val left = MARGIN + (CONTENT_W - w) / 2
+                val dest = RectF(left.toFloat(), y + PAD, (left + w).toFloat(), y + PAD + h)
+                canvas.drawBitmap(bmp, null, dest, null)
+                y += imgH
+                hasContent = true
+            }
+
             for (seg in segments) {
                 if (seg.text.isBlank()) continue
-
                 val paint = if (seg.isCode) codePaint else basePaint
                 val bg = if (seg.isCode) codeBgPaint else null
                 val lines = seg.text.split("\n")
-
                 for (ln in lines) {
                     val shown = if (ln.isEmpty()) " " else ln
                     val layout = makeLayout(shown, paint, CONTENT_W - 2 * PAD)
                     val h = layout.height + 2 * PAD
-
                     if (y + h > PAGE_H - MARGIN) {
                         if (hasContent) {
-                            canvas.drawRect(
-                                MARGIN.toFloat(), sectionTop,
-                                (MARGIN + CONTENT_W).toFloat(), y, borderPaint
-                            )
+                            canvas.drawRect(MARGIN.toFloat(), sectionTop, (MARGIN + CONTENT_W).toFloat(), y, bgPaint)
+                            canvas.drawRect(MARGIN.toFloat(), sectionTop, (MARGIN + CONTENT_W).toFloat(), y, borderPaint)
                         }
                         newPage()
                         sectionTop = y
                     }
-
                     if (bg != null) {
-                        canvas.drawRect(
-                            MARGIN.toFloat(), y,
-                            (MARGIN + CONTENT_W).toFloat(), y + h, bg
-                        )
+                        canvas.drawRect(MARGIN.toFloat(), y, (MARGIN + CONTENT_W).toFloat(), y + h, bg)
                     }
-
                     canvas.save()
                     canvas.translate((MARGIN + PAD).toFloat(), y + PAD)
                     layout.draw(canvas)
@@ -503,49 +491,9 @@ class MainActivity : Activity() {
                 }
             }
 
-            for (bmp in images) {
-                if (bmp.width <= 0 || bmp.height <= 0) continue
-
-                val MAX_IMG_W = (CONTENT_W * 0.85).toInt()
-                val MAX_IMG_H = (PAGE_H / 3).toInt()
-
-                var w = bmp.width
-                var h = bmp.height
-
-                val ratioW = MAX_IMG_W.toFloat() / w
-                val ratioH = MAX_IMG_H.toFloat() / h
-                val ratio = if (ratioW < ratioH) ratioW else ratioH
-
-                if (ratio < 1.0f) {
-                    w = (w * ratio).toInt()
-                    h = (h * ratio).toInt()
-                }
-
-                val imgH = h + 2 * PAD
-
-                if (y + imgH > PAGE_H - MARGIN) {
-                    if (hasContent) {
-                        canvas.drawRect(
-                            MARGIN.toFloat(), sectionTop,
-                            (MARGIN + CONTENT_W).toFloat(), y, borderPaint
-                        )
-                    }
-                    newPage()
-                    sectionTop = y
-                }
-
-                val left = MARGIN + (CONTENT_W - w) / 2
-                val dest = RectF(left.toFloat(), y + PAD, (left + w).toFloat(), y + PAD + h)
-                canvas.drawBitmap(bmp, null, dest, null)
-                y += imgH
-                hasContent = true
-            }
-
             if (hasContent) {
-                canvas.drawRect(
-                    MARGIN.toFloat(), sectionTop,
-                    (MARGIN + CONTENT_W).toFloat(), y, borderPaint
-                )
+                canvas.drawRect(MARGIN.toFloat(), sectionTop, (MARGIN + CONTENT_W).toFloat(), y, bgPaint)
+                canvas.drawRect(MARGIN.toFloat(), sectionTop, (MARGIN + CONTENT_W).toFloat(), y, borderPaint)
                 y += GAP
             }
         }
@@ -553,14 +501,11 @@ class MainActivity : Activity() {
 
     private fun generatePdf() {
         val allTurns = ArrayList(turns)
-
         val curPrompt = promptInput.text.toString()
         val curResponse = responseInput.text.toString()
-
         if (curPrompt.isNotEmpty() || curResponse.isNotEmpty() || currentImages.isNotEmpty()) {
             allTurns.add(ChatTurn(curPrompt, curResponse, ArrayList(currentImages)))
         }
-
         if (allTurns.isEmpty()) {
             Toast.makeText(this, "PDF বানানোর মতো কোনো ডেটা নেই", Toast.LENGTH_SHORT).show()
             return
@@ -568,7 +513,6 @@ class MainActivity : Activity() {
 
         val renderer = PdfRenderer()
         renderer.start()
-
         for ((index, turn) in allTurns.withIndex()) {
             renderer.drawTitle("Turn " + (index + 1))
 
@@ -577,21 +521,21 @@ class MainActivity : Activity() {
                     segments = listOf(Segment(turn.prompt, false)),
                     basePaint = promptPaint,
                     borderPaint = redBorder,
+                    bgPaint = promptBgPaint,
                     sectionTitle = "User Prompt",
                     images = turn.images
                 )
             }
-
             if (turn.response.isNotBlank()) {
                 renderer.drawSection(
                     segments = parseSegments(turn.response),
                     basePaint = responsePaint,
                     borderPaint = blueBorder,
+                    bgPaint = responseBgPaint,
                     sectionTitle = "AI Response"
                 )
             }
         }
-
         renderer.finish()
         savePdf(renderer.document)
         renderer.document.close()
@@ -600,14 +544,12 @@ class MainActivity : Activity() {
     private fun savePdf(document: PdfDocument) {
         val timeStamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(Date())
         val fileName = "AI_Chat_" + timeStamp + ".pdf"
-
         try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                 val values = ContentValues()
                 values.put(MediaStore.MediaColumns.DISPLAY_NAME, fileName)
                 values.put(MediaStore.MediaColumns.MIME_TYPE, "application/pdf")
                 values.put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS)
-
                 val uri = contentResolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
                 if (uri != null) {
                     contentResolver.openOutputStream(uri)?.use { out ->
