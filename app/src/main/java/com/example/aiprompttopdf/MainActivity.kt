@@ -45,6 +45,7 @@ class MainActivity : Activity() {
     private val MARGIN = 40
     private val PAD = 8
     private val GAP = 14f
+    private val CONVERSATION_GAP = 50f
     private val CONTENT_W: Int
         get() = PAGE_W - 2 * MARGIN
 
@@ -175,7 +176,7 @@ class MainActivity : Activity() {
         currentImages.clear()
 
         val label = TextView(this)
-        label.text = "✔ টার্ন " + turns.size + " সংরক্ষিত"
+        label.text = "✔ Conversation " + turns.size + " সংরক্ষিত"
         label.setTextColor(Color.DKGRAY)
         label.setPadding(0, 8, 0, 8)
         turnsContainer.addView(label)
@@ -183,9 +184,12 @@ class MainActivity : Activity() {
         promptInput.setText("")
         responseInput.setText("")
         imageLabel.text = "কোনো ছবি নেই"
-        Toast.makeText(this, "টার্ন যোগ হয়েছে। মোট: " + turns.size, Toast.LENGTH_SHORT).show()
+        Toast.makeText(this, "Conversation যোগ হয়েছে। মোট: " + turns.size, Toast.LENGTH_SHORT).show()
     }
 
+    //==========================================
+    // HTML Export — AI-safe, code অক্ষত থাকবে
+    //==========================================
     private fun escapeHtml(text: String): String {
         return text
             .replace("&", "&amp;")
@@ -259,7 +263,7 @@ class MainActivity : Activity() {
         sb.append("body{font-family:sans-serif;margin:16px;background:#fafafa;color:#111;}\n")
         sb.append("h1{font-size:22px;margin-bottom:4px;}\n")
         sb.append(".meta{font-size:12px;color:#555;margin-top:0;margin-bottom:18px;}\n")
-        sb.append(".turn{background:#fff;border:1px solid #ddd;border-radius:12px;padding:14px;margin-bottom:20px;}\n")
+        sb.append(".turn{background:#fff;border:1px solid #ddd;border-radius:12px;padding:14px;margin-bottom:45px;}\n")
         sb.append(".turn h2{margin:0 0 12px 0;font-size:18px;color:#333;}\n")
         sb.append(".prompt-box{border:2px solid #d32f2f;border-radius:10px;padding:10px;margin-bottom:14px;background:#FFEBEE;}\n")
         sb.append(".prompt-box h3{margin:0 0 8px 0;color:#d32f2f;font-size:15px;}\n")
@@ -278,12 +282,12 @@ class MainActivity : Activity() {
 
         for ((index, turn) in allTurns.withIndex()) {
             sb.append("<div class=\"turn\">\n")
-            sb.append("<h2>Turn ").append(index + 1).append("</h2>\n")
+            sb.append("<h2>Conversation ").append(index + 1).append("</h2>\n")
 
             if (turn.prompt.isNotEmpty() || turn.images.isNotEmpty()) {
                 sb.append("<div class=\"prompt-box\">\n")
                 sb.append("<h3>User Prompt</h3>\n")
-                
+
                 for (bmp in turn.images) {
                     val base64Image = bitmapToBase64(bmp)
                     if (base64Image.isNotEmpty()) {
@@ -292,7 +296,7 @@ class MainActivity : Activity() {
                         sb.append("\" alt=\"Prompt image\">\n")
                     }
                 }
-                
+
                 if (turn.prompt.isNotEmpty()) {
                     sb.append("<pre class=\"prompt-text\">")
                     sb.append(escapeHtml(turn.prompt))
@@ -346,6 +350,9 @@ class MainActivity : Activity() {
         }
     }
 
+    //==========================================
+    // PDF Generation
+    //==========================================
     private fun makeLayout(text: String, paint: TextPaint, width: Int): StaticLayout {
         return StaticLayout.Builder.obtain(text, 0, text.length, paint, width)
             .setAlignment(Layout.Alignment.ALIGN_NORMAL)
@@ -405,6 +412,11 @@ class MainActivity : Activity() {
             layout.draw(canvas)
             canvas.restore()
             y += layout.height + 10f
+        }
+
+        fun drawConversationGap() {
+            ensureSpace(CONVERSATION_GAP)
+            y += CONVERSATION_GAP
         }
 
         fun drawSection(
@@ -514,7 +526,7 @@ class MainActivity : Activity() {
         val renderer = PdfRenderer()
         renderer.start()
         for ((index, turn) in allTurns.withIndex()) {
-            renderer.drawTitle("Turn " + (index + 1))
+            renderer.drawTitle("Conversation " + (index + 1))
 
             if (turn.prompt.isNotBlank() || turn.images.isNotEmpty()) {
                 renderer.drawSection(
@@ -535,6 +547,7 @@ class MainActivity : Activity() {
                     sectionTitle = "AI Response"
                 )
             }
+            renderer.drawConversationGap()
         }
         renderer.finish()
         savePdf(renderer.document)
