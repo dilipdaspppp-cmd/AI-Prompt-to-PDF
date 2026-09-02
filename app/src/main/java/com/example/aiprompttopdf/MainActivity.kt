@@ -14,9 +14,11 @@ import android.os.Environment
 import android.provider.MediaStore
 import android.util.Base64
 import android.view.Gravity
+import android.view.View
 import android.widget.Button
 import android.widget.EditText
 import android.widget.LinearLayout
+import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
 import java.io.ByteArrayOutputStream
@@ -30,8 +32,12 @@ class MainActivity : Activity() {
     private lateinit var responseInput: EditText
     private lateinit var turnsContainer: LinearLayout
     private lateinit var imageLabel: TextView
+    private lateinit var addTurnButton: Button
+    private lateinit var cancelEditButton: Button
+    private lateinit var rootScroll: ScrollView
     private val currentImages = ArrayList<Bitmap>()
     private val turns = ArrayList<ChatTurn>()
+    private var editingIndex = -1
     private val PICK_IMAGE = 101
 
     data class ChatTurn(
@@ -52,6 +58,9 @@ class MainActivity : Activity() {
         responseInput = findViewById(R.id.responseInput)
         turnsContainer = findViewById(R.id.turnsContainer)
         imageLabel = findViewById(R.id.imageLabel)
+        addTurnButton = findViewById(R.id.addTurnButton)
+        cancelEditButton = findViewById(R.id.cancelEditButton)
+        rootScroll = findViewById(R.id.rootScroll)
 
         findViewById<Button>(R.id.addImageButton).setOnClickListener {
             val intent = Intent(Intent.ACTION_GET_CONTENT)
@@ -59,8 +68,11 @@ class MainActivity : Activity() {
             intent.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true)
             startActivityForResult(Intent.createChooser(intent, "ছবি নির্বাচন করুন"), PICK_IMAGE)
         }
-        findViewById<Button>(R.id.addTurnButton).setOnClickListener {
+        addTurnButton.setOnClickListener {
             addNewTurn()
+        }
+        cancelEditButton.setOnClickListener {
+            cancelEdit()
         }
         findViewById<Button>(R.id.deleteAllButton).setOnClickListener {
             deleteAllTurns()
@@ -104,13 +116,50 @@ class MainActivity : Activity() {
             Toast.makeText(this, "প্রম্পট বা উত্তর লিখুন", Toast.LENGTH_SHORT).show()
             return
         }
-        turns.add(ChatTurn(prompt, response, ArrayList(currentImages)))
+        if (editingIndex in turns.indices) {
+            turns[editingIndex] = ChatTurn(prompt, response, ArrayList(currentImages))
+            Toast.makeText(this, "Conversation " + (editingIndex + 1) + " আপডেট হয়েছে", Toast.LENGTH_SHORT).show()
+        } else {
+            turns.add(ChatTurn(prompt, response, ArrayList(currentImages)))
+            Toast.makeText(this, "Conversation যোগ হয়েছে। মোট: " + turns.size, Toast.LENGTH_SHORT).show()
+        }
+        resetEditState()
         currentImages.clear()
         refreshTurnsList()
         promptInput.setText("")
         responseInput.setText("")
         imageLabel.text = "কোনো ছবি নেই"
-        Toast.makeText(this, "Conversation যোগ হয়েছে। মোট: " + turns.size, Toast.LENGTH_SHORT).show()
+    }
+
+    private fun startEdit(index: Int) {
+        val turn = turns[index]
+        editingIndex = index
+        promptInput.setText(turn.prompt)
+        responseInput.setText(turn.response)
+        currentImages.clear()
+        currentImages.addAll(turn.images)
+        imageLabel.text = "সংযুক্ত ছবি: " + currentImages.size + " টি"
+        addTurnButton.text = "Update Conversation " + (index + 1)
+        cancelEditButton.visibility = View.VISIBLE
+        refreshTurnsList()
+        rootScroll.fullScroll(ScrollView.FOCUS_UP)
+        Toast.makeText(this, "পরিবর্তন করে Update বাটন চাপুন", Toast.LENGTH_LONG).show()
+    }
+
+    private fun resetEditState() {
+        editingIndex = -1
+        addTurnButton.text = "Add New Conversation"
+        cancelEditButton.visibility = View.GONE
+    }
+
+    private fun cancelEdit() {
+        resetEditState()
+        currentImages.clear()
+        promptInput.setText("")
+        responseInput.setText("")
+        imageLabel.text = "কোনো ছবি নেই"
+        refreshTurnsList()
+        Toast.makeText(this, "এডিট বাতিল হয়েছে", Toast.LENGTH_SHORT).show()
     }
 
     private fun refreshTurnsList() {
@@ -122,25 +171,43 @@ class MainActivity : Activity() {
             row.setPadding(0, 4, 0, 4)
 
             val label = TextView(this)
-            label.text = "✔ Conversation " + (i + 1) + " সংরক্ষিত"
-            label.setTextColor(Color.DKGRAY)
+            if (i == editingIndex) {
+                label.text = "✏️ Conversation " + (i + 1) + " এডিট হচ্ছে..."
+                label.setTextColor(Color.parseColor("#D32F2F"))
+            } else {
+                label.text = "✔ Conversation " + (i + 1) + " সংরক্ষিত"
+                label.setTextColor(Color.DKGRAY)
+            }
             label.layoutParams = LinearLayout.LayoutParams(
                 0,
                 LinearLayout.LayoutParams.WRAP_CONTENT,
                 1f
             )
 
+            val editBtn = Button(this)
+            editBtn.text = "এডিট"
+            editBtn.textSize = 12f
+            val index = i
+            editBtn.setOnClickListener {
+                startEdit(index)
+            }
+
             val deleteBtn = Button(this)
             deleteBtn.text = "ডিলিট"
             deleteBtn.textSize = 12f
-            val index = i
             deleteBtn.setOnClickListener {
+                if (editingIndex == index) {
+                    resetEditState()
+                } else if (editingIndex > index) {
+                    editingIndex--
+                }
                 turns.removeAt(index)
                 refreshTurnsList()
                 Toast.makeText(this, "Conversation " + (index + 1) + " ডিলিট হয়েছে", Toast.LENGTH_SHORT).show()
             }
 
             row.addView(label)
+            row.addView(editBtn)
             row.addView(deleteBtn)
             turnsContainer.addView(row)
         }
@@ -152,8 +219,28 @@ class MainActivity : Activity() {
             return
         }
         turns.clear()
+        resetEditState()
+        currentImages.clear()
+        promptInput.setText("")
+        responseInput.setText("")
+        imageLabel.text = "কোনো ছবি নেই"
         refreshTurnsList()
         Toast.makeText(this, "সব Conversation ডিলিট হয়েছে", Toast.LENGTH_SHORT).show()
+    }
+
+    private fun buildAllTurns(): ArrayList<ChatTurn> {
+        val allTurns = ArrayList(turns)
+        val curPrompt = promptInput.text.toString()
+        val curResponse = responseInput.text.toString()
+        val hasCurrent = curPrompt.isNotEmpty() || curResponse.isNotEmpty() || currentImages.isNotEmpty()
+        if (hasCurrent) {
+            if (editingIndex in allTurns.indices) {
+                allTurns[editingIndex] = ChatTurn(curPrompt, curResponse, ArrayList(currentImages))
+            } else {
+                allTurns.add(ChatTurn(curPrompt, curResponse, ArrayList(currentImages)))
+            }
+        }
+        return allTurns
     }
 
     //==========================================
@@ -221,12 +308,7 @@ class MainActivity : Activity() {
     }
 
     private fun generateHtml() {
-        val allTurns = ArrayList(turns)
-        val curPrompt = promptInput.text.toString()
-        val curResponse = responseInput.text.toString()
-        if (curPrompt.isNotEmpty() || curResponse.isNotEmpty() || currentImages.isNotEmpty()) {
-            allTurns.add(ChatTurn(curPrompt, curResponse, ArrayList(currentImages)))
-        }
+        val allTurns = buildAllTurns()
         if (allTurns.isEmpty()) {
             Toast.makeText(this, "HTML বানানোর মতো কোনো ডেটা নেই", Toast.LENGTH_SHORT).show()
             return
