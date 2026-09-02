@@ -23,9 +23,12 @@ import android.widget.TextView
 import android.widget.Toast
 import java.io.ByteArrayOutputStream
 import java.io.File
+import java.io.FileOutputStream
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import org.json.JSONArray
+import org.json.JSONObject
 
 class MainActivity : Activity() {
     private lateinit var promptInput: EditText
@@ -39,6 +42,7 @@ class MainActivity : Activity() {
     private val turns = ArrayList<ChatTurn>()
     private var editingIndex = -1
     private val PICK_IMAGE = 101
+    private val PICK_HTML = 102
 
     data class ChatTurn(
         val prompt: String,
@@ -72,9 +76,13 @@ class MainActivity : Activity() {
         findViewById<Button>(R.id.deleteAllButton).setOnClickListener {
             deleteAllTurns()
         }
+        findViewById<Button>(R.id.importHtmlButton).setOnClickListener {
+            startImport()
+        }
         findViewById<Button>(R.id.generateHtmlButton).setOnClickListener {
             generateHtml()
         }
+        loadData()
     }
 
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
@@ -92,12 +100,32 @@ class MainActivity : Activity() {
             }
             imageLabel.text = "সংযুক্ত ছবি: " + currentImages.size + " টি"
         }
+        if (requestCode == PICK_HTML && resultCode == RESULT_OK && data != null) {
+            data.data?.let { uri ->
+                val html = readTextFromUri(uri)
+                if (html != null) {
+                    importHtml(html)
+                } else {
+                    Toast.makeText(this, "ফাইল পড়া যায়নি", Toast.LENGTH_LONG).show()
+                }
+            }
+        }
     }
 
     private fun decodeBitmap(uri: Uri): Bitmap? {
         return try {
             contentResolver.openInputStream(uri)?.use { stream ->
                 BitmapFactory.decodeStream(stream)
+            }
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    private fun readTextFromUri(uri: Uri): String? {
+        return try {
+            contentResolver.openInputStream(uri)?.use { stream ->
+                stream.bufferedReader(Charsets.UTF_8).readText()
             }
         } catch (e: Exception) {
             null
@@ -121,6 +149,7 @@ class MainActivity : Activity() {
         resetEditState()
         currentImages.clear()
         refreshTurnsList()
+        saveData()
         promptInput.setText("")
         responseInput.setText("")
         imageLabel.text = "কোনো ছবি নেই"
@@ -198,6 +227,7 @@ class MainActivity : Activity() {
                 }
                 turns.removeAt(index)
                 refreshTurnsList()
+                saveData()
                 Toast.makeText(this, "Conversation " + (index + 1) + " ডিলিট হয়েছে", Toast.LENGTH_SHORT).show()
             }
 
@@ -220,7 +250,152 @@ class MainActivity : Activity() {
         responseInput.setText("")
         imageLabel.text = "কোনো ছবি নেই"
         refreshTurnsList()
+        saveData()
         Toast.makeText(this, "সব Conversation ডিলিট হয়েছে", Toast.LENGTH_SHORT).show()
+    }
+
+    //==========================================
+    // HTML Import — পুরনো ফাইল থেকে ডেটা ফেরত
+    //==========================================
+    private fun startImport() {
+        val intent = Intent(Intent.ACTION_GET_CONTENT)
+        intent.type = "text/html"
+        intent.addCategory(Intent.CATEGORY_OPENABLE)
+        startActivityForResult(Intent.createChooser(intent, "HTML ফাইল নির্বাচন করুন"), PICK_HTML)
+    }
+
+    private fun unescapeHtml(text: String): String {
+        return text
+            .replace("&lt;", "<")
+            .replace("&gt;", ">")
+            .replace("&quot;", "\"")
+            .replace("&#39;", "'")
+            .replace("&amp;", "&")
+    }
+
+    private fun extractPre(chunk: String, marker: String): String {
+        val s = chunk.indexOf(marker)
+        if (s < 0) return ""
+        val start = s + marker.length
+        val end = chunk.indexOf("</pre>", start)
+        if (end < 0) return ""
+        return unescapeHtml(chunk.substring(start, end))
+    }
+
+    private fun extractResponse(chunk: String): String {
+        val hiddenMarker = "style=\"display:none\">"
+        val hs = chunk.indexOf(hiddenMarker)
+        if (hs >= 0) {
+            val start = hs + hiddenMarker.length
+            val end = chunk.indexOf("</pre>", start)
+            if (end >= 0) return unescapeHtml(chunk.substring(start, end))
+        }
+        return extractPre(chunk, "class=\"response-text\">")
+    }
+
+    private fun importHtml(html: String) {
+        val marker = "<div class=\"turn\">"
+        var count = 0
+        var idx = html.indexOf(marker)
+        while (idx >= 0) {
+            val nextIdx = html.indexOf(marker, idx + marker.length)
+            val chunk = if (nextIdx >= 0) html.substring(idx, nextIdx) else html.substring(idx)
+
+            val images = ArrayList<Bitmap>()
+            val imgMarker = "data:image/jpeg;base64,"
+            var searchFrom = 0
+            while (true) {
+                val ms = chunk.indexOf(imgMarker, searchFrom)
+                if (ms < 0) break
+                val bStart = ms + imgMarker.length
+                val bEnd = chunk.indexOf("\"", bStart)
+                if (bEnd < 0) break
+                try {
+                    val bytes = Base64.decode(chunk.substring(bStart, bEnd), Base64.DEFAULT)
+                    val bmp = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+                    if (bmp != null) images.add(bmp)
+                } catch (ex: Exception) {
+                }
+                searchFrom = bEnd + 1
+            }
+
+            val prompt = extractPre(chunk, "class=\"prompt-text\">")
+            val response = extractResponse(chunk)
+
+            if (prompt.isNotEmpty() || response.isNotEmpty() || images.isNotEmpty()) {
+                turns.add(ChatTurn(prompt, response, images))
+                count++
+            }
+            idx = nextIdx
+        }
+        if (count > 0) {
+            refreshTurnsList()
+            saveData()
+            Toast.makeText(this, count.toString() + " টি Conversation ইমপোর্ট হয়েছে", Toast.LENGTH_LONG).show()
+        } else {
+            Toast.makeText(this, "ডেটা পাওয়া যায়নি — ফাইলটি আমাদের অ্যাপের বানানো কিনা দেখুন", Toast.LENGTH_LONG).show()
+        }
+    }
+
+    //==========================================
+    // Auto Save — অ্যাপ বন্ধ করলেও ডেটা থাকবে
+    //==========================================
+    private fun saveData() {
+        try {
+            val dir = File(filesDir, "conversations")
+            if (!dir.exists()) dir.mkdirs()
+            dir.listFiles()?.forEach { it.delete() }
+            val root = JSONObject()
+            val arr = JSONArray()
+            for ((tIndex, turn) in turns.withIndex()) {
+                val obj = JSONObject()
+                obj.put("prompt", turn.prompt)
+                obj.put("response", turn.response)
+                val imgArr = JSONArray()
+                for ((i, bmp) in turn.images.withIndex()) {
+                    val fname = "img_" + tIndex + "_" + i + ".jpg"
+                    val f = File(dir, fname)
+                    FileOutputStream(f).use { out ->
+                        bmp.compress(Bitmap.CompressFormat.JPEG, 85, out)
+                    }
+                    imgArr.put(fname)
+                }
+                obj.put("images", imgArr)
+                arr.put(obj)
+            }
+            root.put("turns", arr)
+            File(dir, "index.json").writeText(root.toString(), Charsets.UTF_8)
+        } catch (e: Exception) {
+        }
+    }
+
+    private fun loadData() {
+        try {
+            val dir = File(filesDir, "conversations")
+            val indexFile = File(dir, "index.json")
+            if (!indexFile.exists()) return
+            val root = JSONObject(indexFile.readText(Charsets.UTF_8))
+            val arr = root.optJSONArray("turns") ?: return
+            for (i in 0 until arr.length()) {
+                val obj = arr.getJSONObject(i)
+                val prompt = obj.optString("prompt", "")
+                val response = obj.optString("response", "")
+                val images = ArrayList<Bitmap>()
+                val imgArr = obj.optJSONArray("images")
+                if (imgArr != null) {
+                    for (j in 0 until imgArr.length()) {
+                        val f = File(dir, imgArr.getString(j))
+                        if (f.exists()) {
+                            val bmp = BitmapFactory.decodeFile(f.absolutePath)
+                            if (bmp != null) images.add(bmp)
+                        }
+                    }
+                }
+                turns.add(ChatTurn(prompt, response, images))
+            }
+            if (turns.isNotEmpty()) refreshTurnsList()
+        } catch (e: Exception) {
+        }
     }
 
     private fun buildAllTurns(): ArrayList<ChatTurn> {
