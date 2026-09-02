@@ -7,19 +7,13 @@ import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Canvas
 import android.graphics.Color
-import android.graphics.Paint
-import android.graphics.RectF
-import android.graphics.Typeface
-import android.graphics.pdf.PdfDocument
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.os.Environment
 import android.provider.MediaStore
-import android.text.Layout
-import android.text.StaticLayout
-import android.text.TextPaint
 import android.util.Base64
+import android.view.Gravity
 import android.widget.Button
 import android.widget.EditText
 import android.widget.LinearLayout
@@ -27,7 +21,6 @@ import android.widget.TextView
 import android.widget.Toast
 import java.io.ByteArrayOutputStream
 import java.io.File
-import java.io.FileOutputStream
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -40,78 +33,12 @@ class MainActivity : Activity() {
     private val currentImages = ArrayList<Bitmap>()
     private val turns = ArrayList<ChatTurn>()
     private val PICK_IMAGE = 101
-    private val PAGE_W = 595
-    private val PAGE_H = 842
-    private val MARGIN = 40
-    private val PAD = 8
-    private val GAP = 14f
-    private val CONVERSATION_GAP = 50f
-    private val CONTENT_W: Int
-        get() = PAGE_W - 2 * MARGIN
 
     data class ChatTurn(
         val prompt: String,
         val response: String,
         val images: List<Bitmap>
     )
-
-    data class Segment(
-        val text: String,
-        val isCode: Boolean
-    )
-
-    private val promptPaint = TextPaint().apply {
-        color = Color.RED
-        textSize = 13f
-        isAntiAlias = true
-    }
-
-    private val responsePaint = TextPaint().apply {
-        color = Color.BLUE
-        textSize = 13f
-        isAntiAlias = true
-    }
-
-    private val codePaint = TextPaint().apply {
-        color = Color.BLACK
-        textSize = 12f
-        typeface = Typeface.MONOSPACE
-        isAntiAlias = true
-    }
-
-    private val titlePaint = TextPaint().apply {
-        color = Color.BLACK
-        textSize = 16f
-        typeface = Typeface.DEFAULT_BOLD
-        isAntiAlias = true
-    }
-
-    private val codeBgPaint = Paint().apply {
-        color = Color.parseColor("#ECECEC")
-        style = Paint.Style.FILL
-    }
-
-    private val promptBgPaint = Paint().apply {
-        color = Color.parseColor("#FFEBEE")
-        style = Paint.Style.FILL
-    }
-
-    private val responseBgPaint = Paint().apply {
-        color = Color.parseColor("#E3F2FD")
-        style = Paint.Style.FILL
-    }
-
-    private val redBorder = Paint().apply {
-        color = Color.RED
-        style = Paint.Style.STROKE
-        strokeWidth = 2f
-    }
-
-    private val blueBorder = Paint().apply {
-        color = Color.BLUE
-        style = Paint.Style.STROKE
-        strokeWidth = 2f
-    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -130,11 +57,11 @@ class MainActivity : Activity() {
         findViewById<Button>(R.id.addTurnButton).setOnClickListener {
             addNewTurn()
         }
+        findViewById<Button>(R.id.deleteAllButton).setOnClickListener {
+            deleteAllTurns()
+        }
         findViewById<Button>(R.id.generateHtmlButton).setOnClickListener {
             generateHtml()
-        }
-        findViewById<Button>(R.id.generatePdfButton).setOnClickListener {
-            generatePdf()
         }
     }
 
@@ -174,17 +101,54 @@ class MainActivity : Activity() {
         }
         turns.add(ChatTurn(prompt, response, ArrayList(currentImages)))
         currentImages.clear()
-
-        val label = TextView(this)
-        label.text = "✔ Conversation " + turns.size + " সংরক্ষিত"
-        label.setTextColor(Color.DKGRAY)
-        label.setPadding(0, 8, 0, 8)
-        turnsContainer.addView(label)
-
+        refreshTurnsList()
         promptInput.setText("")
         responseInput.setText("")
         imageLabel.text = "কোনো ছবি নেই"
         Toast.makeText(this, "Conversation যোগ হয়েছে। মোট: " + turns.size, Toast.LENGTH_SHORT).show()
+    }
+
+    private fun refreshTurnsList() {
+        turnsContainer.removeAllViews()
+        for (i in turns.indices) {
+            val row = LinearLayout(this)
+            row.orientation = LinearLayout.HORIZONTAL
+            row.gravity = Gravity.CENTER_VERTICAL
+            row.setPadding(0, 4, 0, 4)
+
+            val label = TextView(this)
+            label.text = "✔ Conversation " + (i + 1) + " সংরক্ষিত"
+            label.setTextColor(Color.DKGRAY)
+            label.layoutParams = LinearLayout.LayoutParams(
+                0,
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+                1f
+            )
+
+            val deleteBtn = Button(this)
+            deleteBtn.text = "ডিলিট"
+            deleteBtn.textSize = 12f
+            val index = i
+            deleteBtn.setOnClickListener {
+                turns.removeAt(index)
+                refreshTurnsList()
+                Toast.makeText(this, "Conversation " + (index + 1) + " ডিলিট হয়েছে", Toast.LENGTH_SHORT).show()
+            }
+
+            row.addView(label)
+            row.addView(deleteBtn)
+            turnsContainer.addView(row)
+        }
+    }
+
+    private fun deleteAllTurns() {
+        if (turns.isEmpty()) {
+            Toast.makeText(this, "ডিলিট করার মতো কিছু নেই", Toast.LENGTH_SHORT).show()
+            return
+        }
+        turns.clear()
+        refreshTurnsList()
+        Toast.makeText(this, "সব Conversation ডিলিট হয়েছে", Toast.LENGTH_SHORT).show()
     }
 
     //==========================================
@@ -344,242 +308,6 @@ class MainActivity : Activity() {
                 val file = File(dir, fileName)
                 file.writeText(html, Charsets.UTF_8)
                 Toast.makeText(this, "HTML Saved Successfully: " + fileName, Toast.LENGTH_LONG).show()
-            }
-        } catch (e: Exception) {
-            Toast.makeText(this, "Error: " + e.message, Toast.LENGTH_LONG).show()
-        }
-    }
-
-    //==========================================
-    // PDF Generation
-    //==========================================
-    private fun makeLayout(text: String, paint: TextPaint, width: Int): StaticLayout {
-        return StaticLayout.Builder.obtain(text, 0, text.length, paint, width)
-            .setAlignment(Layout.Alignment.ALIGN_NORMAL)
-            .setLineSpacing(0f, 1f)
-            .setIncludePad(false)
-            .build()
-    }
-
-    private fun parseSegments(response: String): List<Segment> {
-        val result = ArrayList<Segment>()
-        val parts = response.split("```")
-        for (i in parts.indices) {
-            val part = parts[i]
-            if (part.isEmpty()) continue
-            result.add(Segment(part, i % 2 == 1))
-        }
-        return result
-    }
-
-    inner class PdfRenderer {
-        val document = PdfDocument()
-        private var pageNumber = 0
-        private lateinit var page: PdfDocument.Page
-        lateinit var canvas: Canvas
-        var y = 0f
-
-        fun start() {
-            newPage()
-        }
-
-        fun newPage() {
-            if (pageNumber > 0) {
-                document.finishPage(page)
-            }
-            pageNumber++
-            val info = PdfDocument.PageInfo.Builder(PAGE_W, PAGE_H, pageNumber).create()
-            page = document.startPage(info)
-            canvas = page.canvas
-            y = MARGIN.toFloat()
-        }
-
-        fun ensureSpace(needed: Float) {
-            if (y + needed > PAGE_H - MARGIN) {
-                newPage()
-            }
-        }
-
-        fun finish() {
-            document.finishPage(page)
-        }
-
-        fun drawTitle(text: String) {
-            val layout = makeLayout(text, titlePaint, CONTENT_W)
-            ensureSpace(layout.height + 10f)
-            canvas.save()
-            canvas.translate(MARGIN.toFloat(), y)
-            layout.draw(canvas)
-            canvas.restore()
-            y += layout.height + 10f
-        }
-
-        fun drawConversationGap() {
-            ensureSpace(CONVERSATION_GAP)
-            y += CONVERSATION_GAP
-        }
-
-        fun drawSection(
-            segments: List<Segment>,
-            basePaint: TextPaint,
-            borderPaint: Paint,
-            bgPaint: Paint,
-            sectionTitle: String? = null,
-            images: List<Bitmap> = emptyList()
-        ) {
-            var sectionTop = y
-            var hasContent = false
-
-            if (sectionTitle != null) {
-                val titleLayout = makeLayout(sectionTitle, titlePaint, CONTENT_W - 2 * PAD)
-                val titleH = titleLayout.height + PAD
-                if (y + titleH > PAGE_H - MARGIN) {
-                    newPage()
-                    sectionTop = y
-                }
-                canvas.save()
-                canvas.translate((MARGIN + PAD).toFloat(), y + PAD / 2)
-                titleLayout.draw(canvas)
-                canvas.restore()
-                y += titleH
-                hasContent = true
-            }
-
-            for (bmp in images) {
-                if (bmp.width <= 0 || bmp.height <= 0) continue
-                val MAX_IMG_W = (CONTENT_W * 0.85).toInt()
-                val MAX_IMG_H = (PAGE_H / 3).toInt()
-                var w = bmp.width
-                var h = bmp.height
-                val ratioW = MAX_IMG_W.toFloat() / w
-                val ratioH = MAX_IMG_H.toFloat() / h
-                val ratio = if (ratioW < ratioH) ratioW else ratioH
-                if (ratio < 1.0f) {
-                    w = (w * ratio).toInt()
-                    h = (h * ratio).toInt()
-                }
-                val imgH = h + 2 * PAD
-                if (y + imgH > PAGE_H - MARGIN) {
-                    if (hasContent) {
-                        canvas.drawRect(MARGIN.toFloat(), sectionTop, (MARGIN + CONTENT_W).toFloat(), y, bgPaint)
-                        canvas.drawRect(MARGIN.toFloat(), sectionTop, (MARGIN + CONTENT_W).toFloat(), y, borderPaint)
-                    }
-                    newPage()
-                    sectionTop = y
-                }
-                val left = MARGIN + (CONTENT_W - w) / 2
-                val dest = RectF(left.toFloat(), y + PAD, (left + w).toFloat(), y + PAD + h)
-                canvas.drawBitmap(bmp, null, dest, null)
-                y += imgH
-                hasContent = true
-            }
-
-            for (seg in segments) {
-                if (seg.text.isBlank()) continue
-                val paint = if (seg.isCode) codePaint else basePaint
-                val bg = if (seg.isCode) codeBgPaint else null
-                val lines = seg.text.split("\n")
-                for (ln in lines) {
-                    val shown = if (ln.isEmpty()) " " else ln
-                    val layout = makeLayout(shown, paint, CONTENT_W - 2 * PAD)
-                    val h = layout.height + 2 * PAD
-                    if (y + h > PAGE_H - MARGIN) {
-                        if (hasContent) {
-                            canvas.drawRect(MARGIN.toFloat(), sectionTop, (MARGIN + CONTENT_W).toFloat(), y, bgPaint)
-                            canvas.drawRect(MARGIN.toFloat(), sectionTop, (MARGIN + CONTENT_W).toFloat(), y, borderPaint)
-                        }
-                        newPage()
-                        sectionTop = y
-                    }
-                    if (bg != null) {
-                        canvas.drawRect(MARGIN.toFloat(), y, (MARGIN + CONTENT_W).toFloat(), y + h, bg)
-                    }
-                    canvas.save()
-                    canvas.translate((MARGIN + PAD).toFloat(), y + PAD)
-                    layout.draw(canvas)
-                    canvas.restore()
-                    y += h
-                    hasContent = true
-                }
-            }
-
-            if (hasContent) {
-                canvas.drawRect(MARGIN.toFloat(), sectionTop, (MARGIN + CONTENT_W).toFloat(), y, bgPaint)
-                canvas.drawRect(MARGIN.toFloat(), sectionTop, (MARGIN + CONTENT_W).toFloat(), y, borderPaint)
-                y += GAP
-            }
-        }
-    }
-
-    private fun generatePdf() {
-        val allTurns = ArrayList(turns)
-        val curPrompt = promptInput.text.toString()
-        val curResponse = responseInput.text.toString()
-        if (curPrompt.isNotEmpty() || curResponse.isNotEmpty() || currentImages.isNotEmpty()) {
-            allTurns.add(ChatTurn(curPrompt, curResponse, ArrayList(currentImages)))
-        }
-        if (allTurns.isEmpty()) {
-            Toast.makeText(this, "PDF বানানোর মতো কোনো ডেটা নেই", Toast.LENGTH_SHORT).show()
-            return
-        }
-
-        val renderer = PdfRenderer()
-        renderer.start()
-        for ((index, turn) in allTurns.withIndex()) {
-            renderer.drawTitle("Conversation " + (index + 1))
-
-            if (turn.prompt.isNotBlank() || turn.images.isNotEmpty()) {
-                renderer.drawSection(
-                    segments = listOf(Segment(turn.prompt, false)),
-                    basePaint = promptPaint,
-                    borderPaint = redBorder,
-                    bgPaint = promptBgPaint,
-                    sectionTitle = "User Prompt",
-                    images = turn.images
-                )
-            }
-            if (turn.response.isNotBlank()) {
-                renderer.drawSection(
-                    segments = parseSegments(turn.response),
-                    basePaint = responsePaint,
-                    borderPaint = blueBorder,
-                    bgPaint = responseBgPaint,
-                    sectionTitle = "AI Response"
-                )
-            }
-            renderer.drawConversationGap()
-        }
-        renderer.finish()
-        savePdf(renderer.document)
-        renderer.document.close()
-    }
-
-    private fun savePdf(document: PdfDocument) {
-        val timeStamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(Date())
-        val fileName = "AI_Chat_" + timeStamp + ".pdf"
-        try {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                val values = ContentValues()
-                values.put(MediaStore.MediaColumns.DISPLAY_NAME, fileName)
-                values.put(MediaStore.MediaColumns.MIME_TYPE, "application/pdf")
-                values.put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS)
-                val uri = contentResolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
-                if (uri != null) {
-                    contentResolver.openOutputStream(uri)?.use { out ->
-                        document.writeTo(out)
-                    }
-                    Toast.makeText(this, "PDF Saved Successfully: " + fileName, Toast.LENGTH_LONG).show()
-                } else {
-                    Toast.makeText(this, "PDF সেভ ব্যর্থ হয়েছে", Toast.LENGTH_LONG).show()
-                }
-            } else {
-                val dir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
-                if (!dir.exists()) dir.mkdirs()
-                val file = File(dir, fileName)
-                FileOutputStream(file).use { out ->
-                    document.writeTo(out)
-                }
-                Toast.makeText(this, "PDF Saved Successfully: " + fileName, Toast.LENGTH_LONG).show()
             }
         } catch (e: Exception) {
             Toast.makeText(this, "Error: " + e.message, Toast.LENGTH_LONG).show()
