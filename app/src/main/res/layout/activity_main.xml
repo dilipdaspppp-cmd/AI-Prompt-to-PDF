@@ -23,20 +23,25 @@
         <TextView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text="আপনার প্রম্পট লিখুন:"
+            android:text="Paste your prompt here:"
             android:textStyle="bold"
             android:paddingBottom="4dp" />
 
         <EditText
             android:id="@+id/promptInput"
             android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:minLines="3"
-            android:gravity="top"
-            android:hint="এখানে প্রম্পট পেস্ট করুন..."
+            android:layout_height="220dp"
+            android:gravity="top|start"
+            android:hint="Paste the prompt text here..."
             android:background="@android:drawable/editbox_background"
-            android:inputType="textMultiLine"
-            android:scrollbars="vertical" />
+            android:fontFamily="monospace"
+            android:textSize="13sp"
+            android:padding="8dp"
+            android:inputType="textMultiLine|textNoSuggestions"
+            android:importantForAutofill="no"
+            android:isScrollContainer="true"
+            android:scrollbars="vertical"
+            android:overScrollMode="ifContentScrolls" />
 
         <Button
             android:id="@+id/addImageButton"
@@ -49,27 +54,31 @@
             android:id="@+id/imageLabel"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text="কোনো ছবি নেই"
+            android:text="No image attached"
             android:padding="6dp" />
 
         <TextView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text="AI-এর উত্তর পেস্ট করুন:"
+            android:text="Paste the AI response here:"
             android:textStyle="bold"
             android:paddingBottom="4dp" />
 
         <EditText
             android:id="@+id/responseInput"
             android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:minLines="6"
-            android:gravity="top"
-            android:hint="এখানে AI-এর উত্তর / কোড পেস্ট করুন..."
-            android:fontFamily="monospace"
+            android:layout_height="300dp"
+            android:gravity="top|start"
+            android:hint="Paste the AI response or code here..."
             android:background="@android:drawable/editbox_background"
-            android:inputType="textMultiLine"
-            android:scrollbars="vertical" />
+            android:fontFamily="monospace"
+            android:textSize="13sp"
+            android:padding="8dp"
+            android:inputType="textMultiLine|textNoSuggestions"
+            android:importantForAutofill="no"
+            android:isScrollContainer="true"
+            android:scrollbars="vertical"
+            android:overScrollMode="ifContentScrolls" />
 
         <Button
             android:id="@+id/addTurnButton"
@@ -105,7 +114,7 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="10dp"
-            android:text="Import HTML (পুরনো ফাইল যোগ করুন)" />
+            android:text="Import HTML (add an old file)" />
 
         <Button
             android:id="@+id/generateHtmlButton"
@@ -116,4 +125,5 @@
             android:text="Generate HTML (AI Safe)" />
 
     </LinearLayout>
+
 </ScrollView>
