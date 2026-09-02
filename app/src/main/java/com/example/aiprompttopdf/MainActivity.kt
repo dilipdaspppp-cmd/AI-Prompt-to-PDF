@@ -32,6 +32,7 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import java.util.concurrent.Executors
+import java.util.concurrent.RejectedExecutionException
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -56,9 +57,12 @@ class MainActivity : Activity() {
     private val PICK_IMAGE = 101
     private val PICK_HTML = 102
 
-    // Max image size. Big enough to keep code screenshots readable.
+    // Long code screenshots must stay readable, so only the WIDTH has a
+    // hard limit. Height is limited only by the total pixel budget, which
+    // means a very tall screenshot is no longer shrunk down.
     private val MAX_W = 1440
-    private val MAX_H = 2400
+    private val MAX_H = 8000
+    private val MAX_PIXELS = 8000000L
 
     // true  = PNG export (lossless, code stays sharp, bigger file)
     // false = JPEG 95 export (smaller file, tiny quality loss)
@@ -107,7 +111,8 @@ class MainActivity : Activity() {
 
     override fun onDestroy() {
         super.onDestroy()
-        io.shutdown()
+        // Only shut the worker down when the app is really closing.
+        if (isFinishing) io.shutdown()
     }
 
     //==========================================
@@ -151,6 +156,22 @@ class MainActivity : Activity() {
         }
     }
 
+    // Never crashes even if the executor was already shut down.
+    private fun postWork(task: Runnable) {
+        try {
+            io.execute(task)
+        } catch (e: RejectedExecutionException) {
+            endWork()
+        }
+    }
+
+    private fun postSave(task: Runnable) {
+        try {
+            io.execute(task)
+        } catch (e: RejectedExecutionException) {
+        }
+    }
+
     private fun enableInnerScroll(view: EditText) {
         view.setOnTouchListener { v, event ->
             v.parent.requestDisallowInterceptTouchEvent(true)
@@ -173,12 +194,16 @@ class MainActivity : Activity() {
     // Safe bitmap decoding (prevents OutOfMemory)
     //==========================================
 
+    // Width limit + pixel budget only. A tall code screenshot keeps its
+    // full width, so the text inside it stays readable.
     private fun sampleSizeFor(w: Int, h: Int): Int {
         if (w <= 0 || h <= 0) return 1
         var s = 1
-        while (w / s > MAX_W || h / s > MAX_H) {
+        while (s < 16) {
+            val sw = w / s
+            val sh = h / s
+            if (sw <= MAX_W && sh <= MAX_H && sw.toLong() * sh.toLong() <= MAX_PIXELS) break
             s *= 2
-            if (s >= 64) break
         }
         return s
     }
@@ -275,7 +300,7 @@ class MainActivity : Activity() {
                 data.data?.let { uris.add(it) }
             }
             if (uris.isNotEmpty() && startWork()) {
-                io.execute {
+                postWork(Runnable {
                     val loaded = ArrayList<Bitmap>()
                     for (u in uris) {
                         decodeBitmap(u)?.let { loaded.add(it) }
@@ -285,17 +310,17 @@ class MainActivity : Activity() {
                         updateImageLabel()
                     }
                     endWork()
-                }
+                })
             }
         }
 
         if (requestCode == PICK_HTML && resultCode == RESULT_OK && data != null) {
             val uri = data.data
             if (uri != null && startWork()) {
-                io.execute {
+                postWork(Runnable {
                     importFromUri(uri)
                     endWork()
-                }
+                })
             }
         }
     }
@@ -314,6 +339,9 @@ class MainActivity : Activity() {
         }
 
         if (editingIndex in turns.indices) {
+            // A fresh id is deliberate: it forces the images of this turn to
+            // be written again under new file names, so an edited turn can
+            // never keep the old pictures by mistake.
             turns[editingIndex] = ChatTurn(newId(), prompt, response, ArrayList(currentImages))
             Toast.makeText(this, "Conversation " + (editingIndex + 1) + " updated", Toast.LENGTH_SHORT).show()
         } else {
@@ -457,7 +485,7 @@ class MainActivity : Activity() {
 
     private fun saveData() {
         val snapshot = ArrayList(turns)
-        io.execute { writeDataSync(snapshot) }
+        postSave(Runnable { writeDataSync(snapshot) })
     }
 
     private fun writeDataSync(list: List<ChatTurn>) {
@@ -514,7 +542,7 @@ class MainActivity : Activity() {
 
     private fun loadData() {
         if (!startWork()) return
-        io.execute {
+        postWork(Runnable {
             val loaded = ArrayList<ChatTurn>()
             var maxId = 0L
             try {
@@ -558,7 +586,7 @@ class MainActivity : Activity() {
                 }
             }
             endWork()
-        }
+        })
     }
 
     //==========================================
@@ -582,13 +610,22 @@ class MainActivity : Activity() {
             .replace("&amp;", "&")
     }
 
+    // Browsers throw away the first newline right after a <pre> tag, so the
+    // export writes one extra newline there and the import removes it again.
+    // This keeps text that begins with an empty line perfectly intact.
+    private fun stripFirstNewline(text: String): String {
+        if (text.startsWith("\r\n")) return text.substring(2)
+        if (text.startsWith("\n")) return text.substring(1)
+        return text
+    }
+
     private fun extractPre(chunk: String, marker: String): String {
         val s = chunk.indexOf(marker)
         if (s < 0) return ""
         val start = s + marker.length
         val end = chunk.indexOf("</pre>", start)
         if (end < 0) return ""
-        return unescapeHtml(chunk.substring(start, end))
+        return unescapeHtml(stripFirstNewline(chunk.substring(start, end)))
     }
 
     private fun importFromUri(uri: Uri) {
@@ -600,6 +637,9 @@ class MainActivity : Activity() {
 
         val parsed = ArrayList<ChatTurn>()
         val marker = "<div class=\"turn\">"
+        // Only a real <img> tag counts, so a data URI written inside the
+        // prompt text can never be mistaken for a picture.
+        val imgMark = "<img src=\"data:image/"
         val b64Mark = "base64,"
         var idx = html.indexOf(marker)
 
@@ -610,7 +650,7 @@ class MainActivity : Activity() {
             val images = ArrayList<Bitmap>()
             var searchFrom = 0
             while (true) {
-                val ms = chunk.indexOf("data:image/", searchFrom)
+                val ms = chunk.indexOf(imgMark, searchFrom)
                 if (ms < 0) break
                 val bm = chunk.indexOf(b64Mark, ms)
                 if (bm < 0) break
@@ -669,10 +709,10 @@ class MainActivity : Activity() {
         }
         if (!startWork()) return
         Toast.makeText(this, "Generating HTML, please wait...", Toast.LENGTH_SHORT).show()
-        io.execute {
+        postWork(Runnable {
             exportHtml(allTurns)
             endWork()
-        }
+        })
     }
 
     private fun exportHtml(allTurns: List<ChatTurn>) {
@@ -740,10 +780,10 @@ class MainActivity : Activity() {
         w.write("pre{white-space:pre-wrap;word-wrap:break-word;overflow-wrap:break-word;font-family:monospace;font-size:13px;line-height:1.5;margin:0;padding:10px;background:#ffffff;border-radius:8px;border:1px solid #e0e0e0;}\n")
         w.write(".prompt-text{color:#d32f2f;}\n")
         w.write(".response-text{color:#1565c0;}\n")
-        w.write("img{display:block;max-width:100%;height:auto;max-height:520px;object-fit:contain;margin:12px auto;border:1px solid #bbb;border-radius:8px;background:#fff;padding:4px;}\n")
+        w.write("img{display:block;max-width:100%;height:auto;margin:12px auto;border:1px solid #bbb;border-radius:8px;background:#fff;padding:4px;}\n")
         w.write("#copyToast{display:none;position:fixed;bottom:20px;left:50%;transform:translateX(-50%);background:#333;color:#fff;padding:10px 20px;border-radius:24px;font-size:14px;z-index:999;}\n")
         w.write("@page{margin:12mm;}\n")
-        w.write("@media print{.copy-btn{display:none;}#copyToast{display:none;}body{background:#fff;margin:0;}}\n")
+        w.write("@media print{.copy-btn{display:none;}#copyToast{display:none;}body{background:#fff;margin:0;}img{max-width:100%;}}\n")
         w.write("</style>\n")
         w.write("</head>\n")
         w.write("<body>\n")
@@ -780,7 +820,7 @@ class MainActivity : Activity() {
                 if (turn.prompt.isNotEmpty()) {
                     w.write("<pre id=\"p")
                     w.write(tId.toString())
-                    w.write("\" class=\"prompt-text\">")
+                    w.write("\" class=\"prompt-text\">\n")
                     w.write(escapeHtml(turn.prompt))
                     w.write("</pre>\n")
                 }
@@ -797,7 +837,7 @@ class MainActivity : Activity() {
                 w.write("</div>\n")
                 w.write("<pre id=\"r")
                 w.write(tId.toString())
-                w.write("\" class=\"response-text\">")
+                w.write("\" class=\"response-text\">\n")
                 w.write(escapeHtml(turn.response))
                 w.write("</pre>\n")
                 w.write("</div>\n")
@@ -831,25 +871,34 @@ class MainActivity : Activity() {
         var scaled: Bitmap? = null
         var flat: Bitmap? = null
         try {
-            var tw = bmp.width
-            var th = bmp.height
-            if (tw <= 0 || th <= 0) return
+            val ow = bmp.width
+            val oh = bmp.height
+            if (ow <= 0 || oh <= 0) return
 
             var scale = 1f
-            if (tw > MAX_W) scale = MAX_W.toFloat() / tw
-            if (th > MAX_H) {
-                val hs = MAX_H.toFloat() / th
+            if (ow > MAX_W) scale = MAX_W.toFloat() / ow
+            if (oh > MAX_H) {
+                val hs = MAX_H.toFloat() / oh
                 if (hs < scale) scale = hs
             }
+            while (scale > 0.05f) {
+                val cw = (ow * scale).toInt()
+                val ch = (oh * scale).toInt()
+                if (cw.toLong() * ch.toLong() <= MAX_PIXELS) break
+                scale *= 0.8f
+            }
+
+            var tw = ow
+            var th = oh
             if (scale < 1f) {
-                tw = (tw * scale).toInt()
-                th = (th * scale).toInt()
+                tw = (ow * scale).toInt()
+                th = (oh * scale).toInt()
             }
             if (tw < 1) tw = 1
             if (th < 1) th = 1
 
             val src: Bitmap
-            if (tw == bmp.width && th == bmp.height) {
+            if (tw == ow && th == oh) {
                 src = bmp
             } else {
                 val s = Bitmap.createScaledBitmap(bmp, tw, th, true)
@@ -857,17 +906,25 @@ class MainActivity : Activity() {
                 src = s
             }
 
-            val flatBmp = Bitmap.createBitmap(tw, th, Bitmap.Config.ARGB_8888)
-            flat = flatBmp
-            val canvas = Canvas(flatBmp)
-            canvas.drawColor(Color.WHITE)
-            canvas.drawBitmap(src, 0f, 0f, null)
+            // Screenshots have no transparency, so the extra white copy is
+            // only made when it is really needed. Saves a lot of memory.
+            val out: Bitmap
+            if (src.hasAlpha()) {
+                val f = Bitmap.createBitmap(tw, th, Bitmap.Config.ARGB_8888)
+                flat = f
+                val canvas = Canvas(f)
+                canvas.drawColor(Color.WHITE)
+                canvas.drawBitmap(src, 0f, 0f, null)
+                out = f
+            } else {
+                out = src
+            }
 
             val stream = ByteArrayOutputStream()
             if (EXPORT_PNG) {
-                flatBmp.compress(Bitmap.CompressFormat.PNG, 100, stream)
+                out.compress(Bitmap.CompressFormat.PNG, 100, stream)
             } else {
-                flatBmp.compress(Bitmap.CompressFormat.JPEG, 95, stream)
+                out.compress(Bitmap.CompressFormat.JPEG, 95, stream)
             }
             val bytes = stream.toByteArray()
             stream.close()
