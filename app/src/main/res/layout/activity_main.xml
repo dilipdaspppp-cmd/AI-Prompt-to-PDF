@@ -14,7 +14,7 @@
         <TextView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text="AI Prompt to HTML"
+            android:text="AI Prompt to PDF"
             android:textSize="22sp"
             android:textStyle="bold"
             android:gravity="center"
@@ -39,6 +39,7 @@
             android:padding="8dp"
             android:inputType="textMultiLine|textNoSuggestions"
             android:importantForAutofill="no"
+            android:saveEnabled="false"
             android:isScrollContainer="true"
             android:scrollbars="vertical"
             android:overScrollMode="ifContentScrolls" />
@@ -54,8 +55,22 @@
             android:id="@+id/imageLabel"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text="No image attached"
+            android:text="কোনো ছবি যোগ করা হয়নি"
             android:padding="6dp" />
+
+        <HorizontalScrollView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:scrollbars="horizontal">
+
+            <LinearLayout
+                android:id="@+id/thumbsContainer"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:paddingBottom="8dp" />
+
+        </HorizontalScrollView>
 
         <TextView
             android:layout_width="match_parent"
@@ -76,6 +91,7 @@
             android:padding="8dp"
             android:inputType="textMultiLine|textNoSuggestions"
             android:importantForAutofill="no"
+            android:saveEnabled="false"
             android:isScrollContainer="true"
             android:scrollbars="vertical"
             android:overScrollMode="ifContentScrolls" />
@@ -103,26 +119,47 @@
             android:paddingTop="6dp" />
 
         <Button
+            android:id="@+id/aiButton"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="16dp"
+            android:minHeight="60dp"
+            android:textSize="17sp"
+            android:textStyle="bold"
+            android:textColor="@android:color/white"
+            android:backgroundTint="@color/primary"
+            android:text="AI-কে দিন (লেখা + ছবি)" />
+
+        <TextView
+            android:id="@+id/statusLabel"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:padding="8dp"
+            android:textSize="14sp"
+            android:textColor="@color/primary"
+            android:visibility="gone" />
+
+        <Button
             android:id="@+id/deleteAllButton"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="10dp"
+            android:layout_marginTop="24dp"
             android:text="Delete All Conversations" />
+
+        <Button
+            android:id="@+id/backupButton"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="10dp"
+            android:text="ব্যাকআপ রাখুন" />
 
         <Button
             android:id="@+id/importHtmlButton"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="10dp"
-            android:text="Import HTML (add an old file)" />
-
-        <Button
-            android:id="@+id/generateHtmlButton"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="16dp"
             android:layout_marginBottom="24dp"
-            android:text="Generate HTML (AI Safe)" />
+            android:text="ব্যাকআপ ফেরত আনুন" />
 
     </LinearLayout>
 
