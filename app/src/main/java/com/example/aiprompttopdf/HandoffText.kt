@@ -15,9 +15,16 @@ class HandoffTurn(val number: Int, val prompt: String, val response: String, val
  * trimmed, escaped or re-wrapped, so every line of code and every space stays.
  * After saving, verify() reads the saved file again and compares it with the
  * original text byte by byte.
+ *
+ * The file begins with an invisible mark (the UTF-8 byte order mark). A plain
+ * text file does not say which alphabet rules it uses, so some apps (Chrome,
+ * for one) guess wrongly and show Bengali as rows of strange symbols. The mark
+ * tells every app to read the file as UTF-8. It sits before the first line,
+ * outside all prompts, responses and code, so the copied text is not touched.
  */
 object HandoffText {
 
+    const val UTF8_MARK = "\uFEFF"
     const val RULE = "======================================================================"
     const val END_OF_FILE = "END OF FILE"
 
@@ -41,6 +48,7 @@ object HandoffText {
     }
 
     fun write(w: Writer, turns: List<HandoffTurn>, generated: String, totalInApp: Int, pictureFiles: Int) {
+        w.write(UTF8_MARK)
         w.write("READ THIS FIRST (a note for the AI)\n")
         w.write("This file is an exact copy of a conversation I had with another AI assistant.\n")
         w.write("I could not continue there because its usage limit ran out, so I am continuing with you.\n")
@@ -116,7 +124,11 @@ object HandoffText {
      * completely and unchanged, in the right place, and that the file is not cut short.
      */
     fun verify(file: ByteArray, turns: List<HandoffTurn>): Check {
-        var pos = 0
+        // The invisible mark must be the very first thing in the file.
+        if (file.size < 3 || file[0] != 0xEF.toByte() || file[1] != 0xBB.toByte() || file[2] != 0xBF.toByte()) {
+            return Check(false, 0, "The mark at the start of the file is missing")
+        }
+        var pos = 3
         for (t in turns) {
             val n = t.number
             if (t.prompt.isNotEmpty() || t.imageLines.isNotEmpty()) {
