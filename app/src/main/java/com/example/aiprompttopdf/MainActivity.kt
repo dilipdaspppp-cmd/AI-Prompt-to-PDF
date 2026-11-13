@@ -8,6 +8,7 @@ import android.graphics.Bitmap
 import android.graphics.Color
 import android.net.Uri
 import android.os.Bundle
+import android.provider.OpenableColumns
 import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
@@ -20,6 +21,8 @@ import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
 import java.io.BufferedWriter
+import java.io.File
+import java.io.FileOutputStream
 import java.io.OutputStreamWriter
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -29,8 +32,8 @@ import java.util.concurrent.Executors
 
 /**
  * Background workers for the whole app.
- * io:     saving, loading, adding pictures, import - always one after another,
- *         so a save can never run at the same time as a load.
+ * io:     saving, loading, adding pictures, bringing files back - always one after
+ *         another, so a save can never run at the same time as a load.
  * work:   long jobs (making the files for the AI, backup), so saving never waits for them.
  * thumbs: the small preview pictures.
  */
@@ -69,8 +72,21 @@ class MainActivity : Activity() {
     private var idSeed = System.currentTimeMillis()
     private val thumbCache = HashMap<String, Bitmap>()
 
+    // The name given to the last download (or read from the files that were brought back).
+    private var lastTitle = ""
+
     private val PICK_IMAGE = 101
-    private val PICK_HTML = 102
+    private val PICK_BACK = 103
+
+    /** What the user chose after pressing "bring back". */
+    private class Selection {
+        var error: String? = null
+        var parsed: HandoffText.Parsed? = null          // a downloaded conversation (text file + pictures)
+        val files = HashMap<String, File>()             // its picture files: name -> copy
+        val missing = ArrayList<String>()               // picture files that were not chosen
+        var backup: HtmlCodec.ImportResult? = null      // a backup file
+        var ignored = 0                                 // chosen files that do not belong
+    }
 
     // Claude takes at most this many files in one chat.
     private val MAX_FILES = 20
@@ -326,42 +342,39 @@ class MainActivity : Activity() {
             }
         }
 
-        if (requestCode == PICK_HTML) {
-            val uri = data.data ?: return
+        if (requestCode == PICK_BACK) {
+            val uris = ArrayList<Uri>()
+            val clip = data.clipData
+            if (clip != null) {
+                for (i in 0 until clip.itemCount) {
+                    val u = clip.getItemAt(i).uri
+                    if (u != null) uris.add(u)
+                }
+            } else {
+                val u = data.data
+                if (u != null) uris.add(u)
+            }
+            if (uris.isEmpty()) return
             pendingImports++
             refreshButtons()
-            showStatus("ব্যাকআপ থেকে আনা হচ্ছে…")
+            showStatus("বেছে নেওয়া ফাইলগুলো পড়া হচ্ছে…")
             val cr = contentResolver
+            val tmpDir = bringBackDir()
             Disk.io.execute {
-                var result: HtmlCodec.ImportResult? = null
-                var error: String? = null
+                var sel = Selection()
                 try {
-                    val bytes = readAllBytes(cr, uri)
-                    if (bytes == null) {
-                        error = "ফাইলটা পড়া যায়নি"
-                    } else {
-                        result = HtmlCodec.parse(bytes) { b -> ImageStore.importFromBytes(b, store) }
-                    }
+                    sel = readSelection(cr, uris, tmpDir)
                 } catch (e: Exception) {
-                    error = "ফাইলটা পড়া যায়নি: " + (e.message ?: "")
+                    sel.error = "ফাইলগুলো পড়া যায়নি: " + (e.message ?: "")
                 } catch (e: OutOfMemoryError) {
-                    error = "ফাইলটা খুব বড়, ফোনের মেমরিতে আঁটল না"
+                    sel.error = "ফাইলটা খুব বড়, ফোনের মেমরিতে আঁটল না"
                 }
+                val result = sel
                 runOnUiThread {
                     pendingImports--
                     refreshButtons()
                     if (!busy) statusLabel.visibility = View.GONE
-                    val r = result
-                    if (r == null || r.turns.isEmpty()) {
-                        toast(error ?: "কোনো কথোপকথন পাওয়া যায়নি। এটা কি এই অ্যাপের ব্যাকআপ ফাইল?")
-                    } else {
-                        for (t in r.turns) turns.add(ChatTurn(newId(), t.prompt, t.response, t.images))
-                        refreshTurnsList()
-                        saveData()
-                        var msg = bn(r.turns.size) + "টা কথোপকথন ফেরত এসেছে"
-                        if (r.failedImages > 0) msg += " (" + bn(r.failedImages) + "টা ছবি পড়া যায়নি)"
-                        toast(msg)
-                    }
+                    if (!gone()) showSelection(result, tmpDir)
                 }
             }
         }
@@ -631,6 +644,7 @@ class MainActivity : Activity() {
                 // Text in the boxes that was never added is not a saved conversation: it stays.
                 if (editingIndex() >= 0) clearInputs()
                 turns.clear()
+                lastTitle = ""
                 refreshTurnsList()
                 saveData()
                 Toast.makeText(this, "সব কথোপকথন মুছে ফেলা হয়েছে", Toast.LENGTH_SHORT).show()
@@ -668,7 +682,7 @@ class MainActivity : Activity() {
         }
         saveDraft()
         if (all.size == 1) {
-            planAiExport(all, BooleanArray(1) { true })
+            askName(all, BooleanArray(1) { true })
             return
         }
         val notAdded = all.size > turns.size
@@ -677,7 +691,37 @@ class MainActivity : Activity() {
         AlertDialog.Builder(this)
             .setTitle("কোন কোন কথোপকথন AI-কে দেবেন?")
             .setMultiChoiceItems(labels, checked) { _, which, isChecked -> checked[which] = isChecked }
-            .setPositiveButton("তৈরি করুন") { _, _ -> planAiExport(all, checked) }
+            .setPositiveButton("এগিয়ে যান") { _, _ ->
+                if (checked.none { it }) {
+                    Toast.makeText(this, "অন্তত একটা কথোপকথন বেছে নিন", Toast.LENGTH_SHORT).show()
+                } else {
+                    askName(all, checked)
+                }
+            }
+            .setNegativeButton("বাতিল", null)
+            .show()
+    }
+
+    /** A name for this download. It becomes part of the folder name, so it is easy to find later. */
+    private fun askName(all: List<ChatTurn>, checked: BooleanArray) {
+        val d = resources.displayMetrics.density
+        val input = EditText(this)
+        input.setSingleLine(true)
+        input.hint = "যেমন: আমার অ্যাপের কাজ"
+        input.setText(lastTitle)
+        val box = LinearLayout(this)
+        box.orientation = LinearLayout.VERTICAL
+        box.setPadding((20 * d).toInt(), (8 * d).toInt(), (20 * d).toInt(), 0)
+        box.addView(input, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT))
+        AlertDialog.Builder(this)
+            .setTitle("এই কথোপকথনের একটা নাম দিন")
+            .setMessage("নামটা Download-এর ফোল্ডারের নামে থাকবে, পরে খুঁজে পেতে সুবিধা হবে। নাম না দিলে শুধু তারিখ থাকবে।")
+            .setView(box)
+            .setPositiveButton("তৈরি করুন") { _, _ ->
+                val title = HandoffText.cleanTitle(input.text.toString())
+                lastTitle = title
+                if (ready()) planAiExport(all, checked, title)
+            }
             .setNegativeButton("বাতিল", null)
             .show()
     }
@@ -693,7 +737,7 @@ class MainActivity : Activity() {
         return sb.toString()
     }
 
-    private fun planAiExport(all: List<ChatTurn>, checked: BooleanArray) {
+    private fun planAiExport(all: List<ChatTurn>, checked: BooleanArray, title: String) {
         val items = ArrayList<AiExport.Item>()
         for (i in all.indices) {
             if (!checked[i]) continue
@@ -720,22 +764,22 @@ class MainActivity : Activity() {
             runOnUiThread {
                 if (fileCount > MAX_FILES && !gone()) {
                     setBusy(false, null)
-                    choosePictures(items, total, fileCount, exporter)
+                    choosePictures(items, total, title, fileCount, exporter)
                 } else {
-                    runAiExport(items, total, exporter)
+                    runAiExport(items, total, title, exporter)
                 }
             }
         }
     }
 
     /** More files than one chat takes: let the user choose which pictures go. */
-    private fun choosePictures(items: List<AiExport.Item>, total: Int, fileCount: Int, exporter: AiExport) {
+    private fun choosePictures(items: List<AiExport.Item>, total: Int, title: String, fileCount: Int, exporter: AiExport) {
         val pics = ArrayList<AiExport.Picture>()
         val names = ArrayList<CharSequence>()
         for (item in items) {
             for (p in item.pictures) {
                 pics.add(p)
-                var s = "কথোপকথন " + bn(item.number) + "-এর ছবি " + bn(p.number)
+                var s = "মেসেজ " + bn(item.number) + "-এর ছবি " + bn(p.number)
                 if (p.parts > 1) s += " (লম্বা ছবি, " + bn(p.parts) + " ভাগে যাবে)"
                 names.add(s)
             }
@@ -746,13 +790,13 @@ class MainActivity : Activity() {
             .setMultiChoiceItems(names.toTypedArray(), checked) { _, which, isChecked -> checked[which] = isChecked }
             .setPositiveButton("তৈরি করুন") { _, _ ->
                 for (i in pics.indices) pics[i].include = checked[i]
-                runAiExport(items, total, exporter)
+                runAiExport(items, total, title, exporter)
             }
             .setNegativeButton("বাতিল", null)
             .show()
     }
 
-    private fun runAiExport(items: List<AiExport.Item>, total: Int, exporter: AiExport) {
+    private fun runAiExport(items: List<AiExport.Item>, total: Int, title: String, exporter: AiExport) {
         setBusy(true, "তৈরি হচ্ছে…")
         val now = Date()
         val stamp = stampNow(now)
@@ -761,7 +805,7 @@ class MainActivity : Activity() {
             var result: AiExport.Result? = null
             var error: String? = null
             try {
-                result = exporter.make(items, total, stamp, generated) { msg ->
+                result = exporter.make(items, total, title, stamp, generated) { msg ->
                     runOnUiThread { if (busy) showStatus(msg) }
                 }
             } catch (e: Exception) {
@@ -790,7 +834,7 @@ class MainActivity : Activity() {
         sb.append("ফোল্ডার: Download/").append(r.folder).append("\n\n")
         if (r.textOk) {
             sb.append("✓ লেখার ফাইল: ").append(bn(r.conversations)).append("টা কথোপকথন, মোট ").append(bn(r.lines))
-                .append(" লাইন। সেভ হওয়া ফাইলটা আসল লেখার সাথে অক্ষরে অক্ষরে মিলিয়ে দেখা হয়েছে, একটা লাইনও বাদ পড়েনি।")
+                .append(" লাইন। সেভ হওয়া ফাইলটা আসল লেখার সাথে অক্ষরে অক্ষরে মিলিয়ে দেখা হয়েছে, একটা লাইনও বাদ পড়েনি। ফাইলটা থেকে সব আবার হুবহু ফেরত পড়া যাচ্ছে, সেটাও দেখে নেওয়া হয়েছে।")
         } else {
             sb.append("⚠ লেখার ফাইলটা মিলিয়ে দেখতে গিয়ে গরমিল পাওয়া গেছে (").append(r.problem)
                 .append(")। এই ফাইলটা AI-কে দেবেন না, আবার তৈরি করুন।")
@@ -798,7 +842,7 @@ class MainActivity : Activity() {
         if (r.pictures > 0) {
             sb.append("\n\n✓ ছবি: ").append(bn(r.pictures)).append("টা")
             if (r.pictureFiles != r.pictures) sb.append(" (লম্বা ছবি ভাগ হয়ে ফাইল ").append(bn(r.pictureFiles)).append("টা)")
-            sb.append("। প্রতিটার মাথায় লেখা আছে ওটা কোন কথোপকথনের ছবি।")
+            sb.append("। প্রতিটার মাথায় লেখা আছে ওটা আপনার কত নম্বর মেসেজের ছবি, সাথে ওই মেসেজের প্রথম কয়েকটা শব্দ।")
         }
         if (r.failedPictures > 0) sb.append("\n\n⚠ ").append(bn(r.failedPictures)).append("টা ছবি তৈরি করা যায়নি।")
         if (r.leftOut > 0) sb.append("\n\n").append(bn(r.leftOut)).append("টা ছবি আপনি বাদ দিয়েছেন।")
@@ -814,6 +858,7 @@ class MainActivity : Activity() {
         val canShare = r.textOk && uris.size == r.files.size && uris.isNotEmpty()
         if (canShare) {
             sb.append("\n\nএখন \"শেয়ার করুন\" চেপে Claude বা অন্য AI বেছে নিন। শেয়ার না হলে AI-এর অ্যাপে ফাইল জোড়ার বোতাম চেপে Download-এর এই ফোল্ডার থেকে ফাইলগুলো দিন।")
+            sb.append("\n\nপরে এই কথোপকথন আবার অ্যাপে আনতে চাইলে \"ফেরত আনুন\" চেপে এই ফোল্ডারের লেখার ফাইল আর ছবিগুলো একসাথে বেছে নেবেন।")
         } else if (r.textOk) {
             sb.append("\n\nAI-এর অ্যাপে ফাইল জোড়ার বোতাম চেপে এই ফোল্ডার থেকে ফাইলগুলো দিন: ").append(r.textFile.where)
         }
@@ -849,7 +894,7 @@ class MainActivity : Activity() {
     }
 
     //==========================================
-    // Backup (one file with everything) and bringing it back
+    // Backup (one file with everything)
     //==========================================
 
     private fun startBackup() {
@@ -920,7 +965,7 @@ class MainActivity : Activity() {
                             sb.append("\n\n⚠ ফাইলটা মিলিয়ে দেখা যায়নি। আর একবার ব্যাকআপ নিয়ে দেখুন।")
                         }
                         if (missing > 0) sb.append("\n\n⚠ ").append(bn(missing)).append("টা ছবি খুঁজে পাওয়া যায়নি।")
-                        sb.append("\n\nনতুন অ্যাপ বসানোর পর \"ব্যাকআপ ফেরত আনুন\" চেপে এই ফাইলটা বেছে নিলে সব ফিরে আসবে।")
+                        sb.append("\n\nনতুন অ্যাপ বসানোর পর \"ফেরত আনুন\" চেপে শুধু এই ফাইলটা বেছে নিলে সব ফিরে আসবে।")
                         AlertDialog.Builder(this)
                             .setTitle("ব্যাকআপ রাখা হয়েছে ✓")
                             .setMessage(sb.toString())
@@ -951,10 +996,370 @@ class MainActivity : Activity() {
         return true
     }
 
+    //==========================================
+    // "ফেরত আনুন": a downloaded conversation (its text file + pictures), or a backup file
+    //==========================================
+
     private fun startImport() {
-        val intent = Intent(Intent.ACTION_GET_CONTENT)
-        intent.type = "text/html"
-        intent.addCategory(Intent.CATEGORY_OPENABLE)
-        startActivityForResult(Intent.createChooser(intent, "ব্যাকআপ ফাইল বাছুন"), PICK_HTML)
+        AlertDialog.Builder(this)
+            .setTitle("কী ফেরত আনবেন?")
+            .setMessage(
+                "১) AI-কে দেওয়ার জন্য ডাউনলোড করা কথোপকথন:\n" +
+                    "Download-এর ভেতরে ওই কথোপকথনের ফোল্ডারটা খুলুন। লেখার ফাইলটায় (.txt) আঙুল চেপে ধরে রাখুন, " +
+                    "তারপর ওই ফোল্ডারের সব ছবিতে একবার করে টোকা দিন। শেষে উপরে \"Select\" বা \"Open\" লেখায় চাপুন।\n\n" +
+                    "২) ব্যাকআপ ফাইল:\nশুধু ওই একটা ফাইলে টোকা দিন।\n\n" +
+                    "একবারে একটা ফোল্ডারের ফাইলই বেছে নিন।"
+            )
+            .setPositiveButton("ফাইল বাছুন") { _, _ -> openPicker() }
+            .setNegativeButton("বাতিল", null)
+            .show()
+    }
+
+    private fun openPicker() {
+        // Every kind of file is allowed here on purpose: with a narrower filter
+        // some phones show the text file or the pictures greyed out.
+        try {
+            val intent = Intent(Intent.ACTION_OPEN_DOCUMENT)
+            intent.addCategory(Intent.CATEGORY_OPENABLE)
+            intent.type = "*/*"
+            intent.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true)
+            startActivityForResult(intent, PICK_BACK)
+        } catch (e: Exception) {
+            try {
+                val intent = Intent(Intent.ACTION_GET_CONTENT)
+                intent.addCategory(Intent.CATEGORY_OPENABLE)
+                intent.type = "*/*"
+                intent.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true)
+                startActivityForResult(Intent.createChooser(intent, "ফাইল বাছুন"), PICK_BACK)
+            } catch (e2: Exception) {
+                toast("এই ফোনে ফাইল বাছার পর্দা খোলা গেল না")
+            }
+        }
+    }
+
+    /** Copies of the chosen picture files are kept here while they are being brought back. */
+    private fun bringBackDir(): File = File(cacheDir, "bringback")
+
+    private fun clearDir(dir: File) {
+        try {
+            val list = dir.listFiles() ?: return
+            for (f in list) f.delete()
+        } catch (e: Exception) {
+        }
+    }
+
+    private fun readHead(cr: ContentResolver, uri: Uri): ByteArray? {
+        return try {
+            cr.openInputStream(uri)?.use { s ->
+                val buf = ByteArray(64)
+                var n = 0
+                while (n < buf.size) {
+                    val r = s.read(buf, n, buf.size - n)
+                    if (r < 0) break
+                    n += r
+                }
+                buf.copyOf(n)
+            }
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    private fun copyToFile(cr: ContentResolver, uri: Uri, target: File): Boolean {
+        return try {
+            val input = cr.openInputStream(uri) ?: return false
+            input.use { inp ->
+                FileOutputStream(target).use { out -> inp.copyTo(out, 65536) }
+            }
+            target.length() > 0L
+        } catch (e: Exception) {
+            target.delete()
+            false
+        }
+    }
+
+    private fun sizeOf(cr: ContentResolver, uri: Uri): Long {
+        var size = -1L
+        try {
+            cr.openAssetFileDescriptor(uri, "r")?.use { afd -> size = afd.length }
+        } catch (e: Exception) {
+        }
+        return size
+    }
+
+    /** true when the first bytes look like our text file ("READ THIS FIRST") or like a backup file ("<"). */
+    private fun beginsLikeOurs(head: ByteArray): Boolean {
+        var i = 0
+        if (head.size >= 3 && head[0] == 0xEF.toByte() && head[1] == 0xBB.toByte() && head[2] == 0xBF.toByte()) i = 3
+        while (i < head.size && (head[i] == ' '.code.toByte() || head[i] == '\n'.code.toByte() || head[i] == '\r'.code.toByte() || head[i] == '\t'.code.toByte())) i++
+        if (i >= head.size) return false
+        if (head[i] == '<'.code.toByte()) return true
+        val mark = "READ THIS FIRST".toByteArray(Charsets.UTF_8)
+        if (i + mark.size > head.size) return false
+        for (k in mark.indices) if (head[i + k] != mark[k]) return false
+        return true
+    }
+
+    /** The file's own name, as the phone shows it (for example "Message01_Picture1_20261113_101500.jpg"). */
+    private fun displayName(cr: ContentResolver, uri: Uri): String {
+        try {
+            val c = cr.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)
+            if (c != null) {
+                try {
+                    if (c.moveToFirst()) {
+                        val n: String? = c.getString(0)
+                        if (n != null && n.isNotEmpty()) return n
+                    }
+                } finally {
+                    c.close()
+                }
+            }
+        } catch (e: Exception) {
+        }
+        val last = uri.lastPathSegment ?: return ""
+        return last.substringAfterLast('/').substringAfterLast(':')
+    }
+
+    /** Runs in the background: looks at every chosen file and works out what was chosen. */
+    private fun readSelection(cr: ContentResolver, uris: List<Uri>, tmpDir: File): Selection {
+        val sel = Selection()
+        if (!tmpDir.exists()) tmpDir.mkdirs()
+        clearDir(tmpDir)
+        val downloads = ArrayList<HandoffText.Parsed>()
+        val backups = ArrayList<ByteArray>()
+        val turnMark = "<div class=\"turn\">".toByteArray(Charsets.UTF_8)
+        var pictures = 0
+        var other = 0
+        var sameName: String? = null
+        for ((i, uri) in uris.withIndex()) {
+            val head = readHead(cr, uri)
+            if (head == null || head.isEmpty()) {
+                other++
+                continue
+            }
+            if (HtmlCodec.sniff(head, head.size) != null) {
+                // a picture
+                // A picture whose name the phone does not tell can never be mixed up with another one.
+                val shown = displayName(cr, uri)
+                val name = if (shown.isEmpty()) "unnamed-" + i else shown
+                val copy = File(tmpDir, "p" + i + ".bin")
+                if (!copyToFile(cr, uri, copy)) {
+                    other++
+                } else if (sel.files.containsKey(name)) {
+                    sameName = name
+                } else {
+                    sel.files[name] = copy
+                    pictures++
+                }
+                continue
+            }
+            // A very big file that does not even begin like one of ours (a video, say) is not loaded at all.
+            if (sizeOf(cr, uri) > 32L * 1024L * 1024L && !beginsLikeOurs(head)) {
+                other++
+                continue
+            }
+            val bytes = readAllBytes(cr, uri)
+            if (bytes == null) {
+                other++
+                continue
+            }
+            val parsed = HandoffText.parse(bytes)
+            if (parsed != null) {
+                downloads.add(parsed)
+            } else if (HtmlCodec.indexOf(bytes, turnMark, 0, bytes.size) >= 0) {
+                backups.add(bytes)
+            } else {
+                other++
+            }
+        }
+
+        if (downloads.size > 1) {
+            sel.error = "একসাথে " + bn(downloads.size) + "টা কথোপকথনের লেখার ফাইল বাছা হয়েছে। একবারে একটা ফোল্ডারের ফাইলই বেছে নিন: সেই ফোল্ডারের লেখার ফাইল আর তার ছবিগুলো।"
+            return sel
+        }
+        if (downloads.size == 1) {
+            val dup = sameName
+            if (dup != null) {
+                sel.error = "একই নামের দুটো ছবি বাছা হয়েছে (" + dup + ")। মনে হচ্ছে দুটো আলাদা ফোল্ডারের ছবি মিশে গেছে। একবারে একটা ফোল্ডারের ফাইলই বেছে নিন।"
+                return sel
+            }
+            val parsed = downloads[0]
+            sel.parsed = parsed
+            val wanted = AiImport.wantedFiles(parsed)
+            for (name in wanted) if (AiImport.find(sel.files, name) == null) sel.missing.add(name)
+            var extra = 0
+            val used = HashSet<File>()
+            for (name in wanted) {
+                val f = AiImport.find(sel.files, name)
+                if (f != null) used.add(f)
+            }
+            for (f in sel.files.values) if (!used.contains(f)) extra++
+            sel.ignored = extra + other + backups.size
+            return sel
+        }
+        if (backups.size > 1) {
+            sel.error = "একসাথে " + bn(backups.size) + "টা ব্যাকআপ ফাইল বাছা হয়েছে। একবারে একটা ব্যাকআপ ফাইল বেছে নিন।"
+            return sel
+        }
+        if (backups.size == 1) {
+            sel.backup = HtmlCodec.parse(backups[0]) { b -> ImageStore.importFromBytes(b, store) }
+            return sel
+        }
+        if (pictures > 0) {
+            sel.error = "শুধু ছবি বাছা হয়েছে, লেখার ফাইলটা (.txt) বাছা হয়নি। ওই ফোল্ডারের লেখার ফাইলটা আর ছবিগুলো একসাথে বেছে নিন।"
+        } else {
+            sel.error = "বেছে নেওয়া ফাইল এই অ্যাপের তৈরি নয়, অথবা ফাইলটা নষ্ট হয়ে গেছে। \"AI-কে দিন\" দিয়ে তৈরি ফোল্ডারের লেখার ফাইল, বা \"ব্যাকআপ রাখুন\" দিয়ে তৈরি ব্যাকআপ ফাইল বেছে নিন।"
+        }
+        return sel
+    }
+
+    private fun showNote(title: String, message: String) {
+        AlertDialog.Builder(this)
+            .setTitle(title)
+            .setMessage(message)
+            .setPositiveButton("ঠিক আছে", null)
+            .show()
+    }
+
+    /** Shows what was found in the chosen files and asks before anything is added to the list. */
+    private fun showSelection(sel: Selection, tmpDir: File) {
+        val error = sel.error
+        if (error != null) {
+            showNote("ফেরত আনা গেল না", error)
+            return
+        }
+        val backup = sel.backup
+        if (backup != null) {
+            if (backup.turns.isEmpty()) {
+                showNote("ফেরত আনা গেল না", "এই ফাইলে কোনো কথোপকথন পাওয়া যায়নি। এটা কি এই অ্যাপের ব্যাকআপ ফাইল?")
+            } else if (turns.isEmpty()) {
+                addBackup(backup)
+            } else {
+                AlertDialog.Builder(this)
+                    .setTitle("ব্যাকআপ ফেরত আনব?")
+                    .setMessage(
+                        "ব্যাকআপ ফাইলে " + bn(backup.turns.size) + "টা কথোপকথন আছে।\n\nতালিকায় এখন " + bn(turns.size) +
+                            "টা কথোপকথন আছে। ব্যাকআপেরগুলো তার পরে যোগ হবে, আগেরগুলো মুছবে না।"
+                    )
+                    .setPositiveButton("হ্যাঁ, ফেরত আনুন") { _, _ -> if (ready()) addBackup(backup) }
+                    .setNegativeButton("বাতিল", null)
+                    .show()
+            }
+            return
+        }
+        val parsed = sel.parsed ?: return
+        var havePictures = 0
+        for (t in parsed.turns) {
+            for (p in t.pictures) {
+                if (p.state == HandoffPicture.ATTACHED && p.parts.any { AiImport.find(sel.files, it.file) != null }) havePictures++
+            }
+        }
+        val allPictures = AiImport.pictureCount(parsed)
+        val sb = StringBuilder()
+        if (parsed.title.isNotEmpty()) sb.append("নাম: ").append(parsed.title).append("\n")
+        sb.append("কথোপকথন: ").append(bn(parsed.turns.size)).append("টা\n")
+        sb.append("ছবি: ").append(bn(havePictures)).append("টা")
+        if (havePictures < allPictures) sb.append(" (থাকার কথা ").append(bn(allPictures)).append("টা)")
+        if (sel.missing.isNotEmpty()) {
+            sb.append("\n\n⚠ এই ছবির ফাইলগুলো বাছা হয়নি:")
+            for ((i, name) in sel.missing.withIndex()) {
+                if (i >= 10) {
+                    sb.append("\n… আরও ").append(bn(sel.missing.size - 10)).append("টা")
+                    break
+                }
+                sb.append("\n• ").append(name)
+            }
+            sb.append("\n\nএভাবে ফেরত আনলে ওই ছবিগুলো থাকবে না। সব ছবি চাইলে \"বাতিল\" চেপে আবার লেখার ফাইলের সাথে সব ছবি বেছে নিন।")
+        }
+        val notSent = AiImport.notSent(parsed)
+        if (notSent > 0) {
+            sb.append("\n\nডাউনলোড করার সময়ই ").append(bn(notSent)).append("টা ছবি বাদ ছিল, তাই সেগুলো এই ফাইলগুলোর মধ্যে নেই।")
+        }
+        if (parsed.format == 1) {
+            sb.append("\n\nএগুলো অ্যাপের আগের সংস্করণে ডাউনলোড করা ফাইল। লেখা আর কোড ফেরত আসবে। ভাগ হয়ে যাওয়া লম্বা ছবি জোড়া লাগবে না, টুকরো হিসেবেই আসবে।")
+        }
+        if (sel.ignored > 0) {
+            sb.append("\n\nবেছে নেওয়া ").append(bn(sel.ignored)).append("টা ফাইল এই কথোপকথনের নয়, সেগুলো বাদ থাকবে।")
+        }
+        if (turns.isNotEmpty()) {
+            sb.append("\n\nতালিকায় এখন ").append(bn(turns.size)).append("টা কথোপকথন আছে। এগুলো তার পরে যোগ হবে, আগেরগুলো মুছবে না।")
+        }
+        AlertDialog.Builder(this)
+            .setTitle("ফেরত আনব?")
+            .setMessage(sb.toString())
+            .setPositiveButton("হ্যাঁ, ফেরত আনুন") { _, _ -> if (ready()) restoreDownload(parsed, sel, tmpDir) }
+            .setNegativeButton("বাতিল", null)
+            .show()
+    }
+
+    private fun addBackup(backup: HtmlCodec.ImportResult) {
+        for (t in backup.turns) turns.add(ChatTurn(newId(), t.prompt, t.response, t.images))
+        refreshTurnsList()
+        saveData()
+        var msg = bn(backup.turns.size) + "টা কথোপকথন ফেরত এসেছে"
+        if (backup.failedImages > 0) msg += " (" + bn(backup.failedImages) + "টা ছবি পড়া যায়নি)"
+        toast(msg)
+    }
+
+    private fun restoreDownload(parsed: HandoffText.Parsed, sel: Selection, tmpDir: File) {
+        pendingImports++
+        refreshButtons()
+        showStatus("ফেরত আনা হচ্ছে…")
+        val importer = AiImport(store)
+        Disk.io.execute {
+            var res: AiImport.Result? = null
+            var error: String? = null
+            try {
+                res = importer.restore(parsed, sel.files) { msg ->
+                    runOnUiThread { if (pendingImports > 0 && !busy) showStatus(msg) }
+                }
+            } catch (e: Exception) {
+                error = e.message ?: e.toString()
+            } catch (e: OutOfMemoryError) {
+                error = "ফোনের মেমরি কম পড়েছে"
+            }
+            clearDir(tmpDir)
+            runOnUiThread {
+                pendingImports--
+                refreshButtons()
+                if (!busy) statusLabel.visibility = View.GONE
+                val r = res
+                if (r == null || r.turns.isEmpty()) {
+                    if (!gone()) showNote("ফেরত আনা গেল না", error ?: "ফাইলে কোনো কথোপকথন পাওয়া যায়নি।")
+                } else {
+                    for (t in r.turns) turns.add(ChatTurn(newId(), t.prompt, t.response, t.images))
+                    if (parsed.title.isNotEmpty()) lastTitle = parsed.title
+                    refreshTurnsList()
+                    saveData()
+                    if (!gone()) showRestored(parsed, sel, r)
+                }
+            }
+        }
+    }
+
+    private fun showRestored(parsed: HandoffText.Parsed, sel: Selection, r: AiImport.Result) {
+        val sb = StringBuilder()
+        sb.append("✓ ").append(bn(r.turns.size)).append("টা কথোপকথন তালিকার শেষে যোগ হয়েছে।")
+        if (parsed.format == 2) sb.append(" লেখা আর কোড ফাইলে যেমন ছিল, হুবহু তেমনই এসেছে।")
+        if (r.pictures > 0) {
+            sb.append("\n\n✓ ছবি: ").append(bn(r.pictures)).append("টা।")
+            if (r.withStrip == 0) sb.append(" মাথার হলুদ পট্টি সরিয়ে দেওয়া হয়েছে।")
+            if (r.joined > 0) sb.append(" ভাগ হয়ে থাকা ").append(bn(r.joined)).append("টা লম্বা ছবি আবার জুড়ে একটা করা হয়েছে।")
+        }
+        if (r.inParts > 0) {
+            sb.append("\n\n").append(bn(r.inParts)).append("টা লম্বা ছবি জোড়া যায়নি, সেগুলো টুকরো হিসেবেই এসেছে (কিছু বাদ পড়েনি)।")
+        }
+        if (r.withStrip > 0) {
+            sb.append("\n\n⚠ ").append(bn(r.withStrip)).append("টা ছবির হলুদ পট্টি নিশ্চিতভাবে চেনা যায়নি। ভুল করে ছবি কেটে না ফেলার জন্য সেগুলো পট্টিসহই রাখা হয়েছে।")
+        }
+        if (sel.missing.isNotEmpty()) {
+            sb.append("\n\n⚠ ").append(bn(sel.missing.size)).append("টা ছবির ফাইল বাছা হয়নি, তাই সেগুলো আসেনি।")
+        }
+        if (r.failed.isNotEmpty()) {
+            sb.append("\n\n⚠ এই ছবির ফাইলগুলো পড়া যায়নি:")
+            for (f in r.failed) sb.append("\n• ").append(f)
+        }
+        sb.append("\n\nDownload-এর ফোল্ডারটা যেমন ছিল তেমনই আছে। আর দরকার না থাকলে ফোনের ফাইল অ্যাপ থেকে নিজে মুছে দিতে পারেন।")
+        showNote("ফেরত এসেছে ✓", sb.toString())
     }
 }
