@@ -159,7 +159,7 @@
             android:layout_height="wrap_content"
             android:layout_marginTop="10dp"
             android:layout_marginBottom="24dp"
-            android:text="ব্যাকআপ ফেরত আনুন" />
+            android:text="ফেরত আনুন (ডাউনলোড বা ব্যাকআপ)" />
 
     </LinearLayout>
 
