@@ -17,19 +17,26 @@ import java.util.Locale
 
 /**
  * Makes the files that are handed to the next AI:
- *  - ONE plain text file with every prompt, response and all code, copied exactly;
+ *  - ONE plain text file with every message, reply and all code, copied exactly;
  *  - every picture as its own image file, with a yellow strip at the top that says
- *    which conversation it belongs to ("Conversation 2 - Image 1").
- * Everything is saved into Download/AI_Chat_<date_time>/ .
+ *    which message it belongs to ("Picture 1 of 2 for MY MESSAGE 3") and shows the
+ *    first words of that message.
+ * Everything is saved into Download/AI_Chat_<name>_<date_time>/ .
+ * Every picture file carries the date and time of its download in its name, so
+ * pictures of two different downloads can never be mixed up.
  *
  * A very tall picture (a long scrolling screenshot) is saved in several parts,
  * because an AI shrinks a tall picture until its text cannot be read. It is cut
  * only in an empty gap between two lines of text; if no gap is found, a small
  * strip is repeated in the next part, so nothing is lost.
+ *
+ * For every saved picture file the text file notes how tall the yellow strip is
+ * and where the picture sits, so the app can later take the strip off again and
+ * put the parts of a tall picture back together (see AiImport).
  */
 class AiExport(private val ctx: Context, private val store: Store) {
 
-    /** name = file name in the app's storage, number = its number inside its conversation. */
+    /** name = file name in the app's storage, number = its number inside its message. */
     class Picture(val name: String, val number: Int) {
         var include = true
         var parts = 1
@@ -50,6 +57,11 @@ class AiExport(private val ctx: Context, private val store: Store) {
         val failedPictures: Int,
         val leftOut: Int
     )
+
+    private class SavedPart(val part: PicturePart, val file: SavedFile)
+
+    /** The first words of a message, on one line. more = the message goes on after them. */
+    private class Words(val text: String, val more: Boolean)
 
     companion object {
         const val MAX_RATIO = 2.6f   // taller than this (height / width): saved in parts
@@ -73,6 +85,34 @@ class AiExport(private val ctx: Context, private val store: Store) {
             }
             return n
         }
+
+        /**
+         * The part of a name that can safely be used in a folder name: letters and
+         * digits of any language, with "_" in place of spaces. At most 40 characters.
+         */
+        fun safeName(title: String): String {
+            val sb = StringBuilder()
+            for (ch in title) {
+                if (sb.length >= 40) break
+                val type = Character.getType(ch)
+                val mark = type == Character.NON_SPACING_MARK.toInt() || type == Character.COMBINING_SPACING_MARK.toInt()
+                if (Character.isLetterOrDigit(ch) || (mark && sb.isNotEmpty())) {
+                    sb.append(ch)
+                } else if (ch == '-') {
+                    if (sb.isNotEmpty()) sb.append('-')
+                } else if (ch == ' ' || ch == '_' || ch == '\t' || ch == '\n' || ch == '\r') {
+                    if (sb.isNotEmpty() && sb[sb.length - 1] != '_') sb.append('_')
+                }
+            }
+            while (sb.isNotEmpty() && (sb[sb.length - 1] == '_' || sb[sb.length - 1] == '-')) sb.setLength(sb.length - 1)
+            return sb.toString()
+        }
+
+        /** The folder of one download: AI_Chat_<name>_<date_time>, or AI_Chat_<date_time> without a name. */
+        fun folderName(title: String, stamp: String): String {
+            val safe = safeName(title)
+            return if (safe.isEmpty()) "AI_Chat_" + stamp else "AI_Chat_" + safe + "_" + stamp
+        }
     }
 
     /** Fills in how many files each picture will become (reads only the picture sizes). */
@@ -91,8 +131,8 @@ class AiExport(private val ctx: Context, private val store: Store) {
         }
     }
 
-    fun make(items: List<Item>, totalInApp: Int, stamp: String, generated: String, progress: (String) -> Unit): Result {
-        val folder = "AI_Chat_" + stamp
+    fun make(items: List<Item>, totalInApp: Int, title: String, stamp: String, generated: String, progress: (String) -> Unit): Result {
+        val folder = folderName(title, stamp)
         val pictureFiles = ArrayList<SavedFile>()
         val turns = ArrayList<HandoffTurn>()
         var pictures = 0
@@ -103,36 +143,31 @@ class AiExport(private val ctx: Context, private val store: Store) {
         var done = 0
 
         for (item in items) {
-            val lines = ArrayList<String>()
+            val pics = ArrayList<HandoffPicture>()
+            val words = firstWords(item.prompt)
             for (p in item.pictures) {
-                val label = "Conversation " + item.number + ", Image " + p.number
                 if (!p.include) {
                     leftOut++
-                    lines.add("[IMAGE: $label | this picture was not attached]")
+                    pics.add(HandoffPicture(p.number, HandoffPicture.LEFT_OUT, ArrayList()))
                     continue
                 }
                 done++
                 progress("ছবি তৈরি হচ্ছে… " + HtmlCodec.bn(done) + " / " + HtmlCodec.bn(wanted))
-                val saved = exportPicture(store.file(p.name), item.number, p.number, folder)
+                val saved = exportPicture(store.file(p.name), item.number, p.number, item.pictures.size, words, folder, stamp)
                 if (saved.isEmpty()) {
                     failed++
-                    lines.add("[IMAGE: $label | this picture could not be attached]")
+                    pics.add(HandoffPicture(p.number, HandoffPicture.FAILED, ArrayList()))
                 } else {
                     pictures++
-                    if (saved.size == 1) {
-                        lines.add("[IMAGE: $label | attached separately as file \"" + saved[0].first + "\"]")
-                    } else {
-                        val sb = StringBuilder()
-                        for (s in saved) {
-                            if (sb.isNotEmpty()) sb.append(", ")
-                            sb.append('"').append(s.first).append('"')
-                        }
-                        lines.add("[IMAGE: $label | a very tall picture, attached separately in " + saved.size + " parts: " + sb + "]")
+                    val parts = ArrayList<PicturePart>()
+                    for (s in saved) {
+                        parts.add(s.part)
+                        pictureFiles.add(s.file)
                     }
-                    for (s in saved) pictureFiles.add(s.second)
+                    pics.add(HandoffPicture(p.number, HandoffPicture.ATTACHED, parts))
                 }
             }
-            turns.add(HandoffTurn(item.number, item.prompt, item.response, lines))
+            turns.add(HandoffTurn(item.number, item.prompt, item.response, pics))
         }
 
         progress("লেখার ফাইল তৈরি হচ্ছে…")
@@ -140,6 +175,7 @@ class AiExport(private val ctx: Context, private val store: Store) {
         var ok = false
         var problem = ""
         var lineCount = 0
+        // The file names stay plain (English letters and digits), so every AI app takes them.
         val pending = SaveUtil.open(ctx, "AI_Chat_" + stamp + ".txt", "text/plain", folder)
         if (pending == null) {
             problem = "Download ফোল্ডারে লেখার ফাইল তৈরি করা গেল না"
@@ -147,7 +183,7 @@ class AiExport(private val ctx: Context, private val store: Store) {
             var written = false
             try {
                 val w = BufferedWriter(OutputStreamWriter(pending.out, Charsets.UTF_8), 65536)
-                HandoffText.write(w, turns, generated, totalInApp, pictureFiles.size)
+                HandoffText.write(w, turns, title, generated, totalInApp)
                 w.flush()
                 written = true
             } catch (e: Exception) {
@@ -166,10 +202,14 @@ class AiExport(private val ctx: Context, private val store: Store) {
                 if (back == null) {
                     problem = "সেভ হওয়া ফাইলটা আবার পড়া গেল না"
                 } else {
-                    val c = HandoffText.verify(back, turns)
-                    ok = c.ok
-                    lineCount = c.lines
-                    if (!c.ok) problem = c.problem
+                    try {
+                        val c = HandoffText.verify(back, turns, title)
+                        ok = c.ok
+                        lineCount = c.lines
+                        if (!c.ok) problem = c.problem
+                    } catch (e: OutOfMemoryError) {
+                        problem = "ফাইলটা মিলিয়ে দেখার সময় ফোনের মেমরি কম পড়েছে"
+                    }
                 }
             }
         }
@@ -183,9 +223,56 @@ class AiExport(private val ctx: Context, private val store: Store) {
 
     // ---------------------------------------------------------------------
 
+    private fun firstWords(prompt: String): Words {
+        val sb = StringBuilder()
+        var space = false
+        var more = false
+        var i = 0
+        while (i < prompt.length) {
+            val ch = prompt[i]
+            if (ch == ' ' || ch == '\n' || ch == '\r' || ch == '\t') {
+                space = sb.isNotEmpty()
+            } else {
+                if (sb.length >= 80) {
+                    more = true
+                    break
+                }
+                if (space) sb.append(' ')
+                space = false
+                sb.append(ch)
+            }
+            i++
+        }
+        return Words(dropBrokenEnd(sb.toString()), more)
+    }
+
+    /** Never leave half of an emoji at the end of a text. */
+    private fun dropBrokenEnd(s: String): String {
+        if (s.isNotEmpty() && Character.isHighSurrogate(s[s.length - 1])) return s.substring(0, s.length - 1)
+        return s
+    }
+
+    /** The third line of the strip: the first words of the message, as many as fit. */
+    private fun wordsLine(words: Words, msg: Int, paint: Paint, maxW: Float): String {
+        if (words.text.isEmpty()) return "(MY MESSAGE $msg has no text, only pictures)"
+        val head = "MY MESSAGE $msg begins: \""
+        var t = words.text
+        var more = words.more
+        var guard = 0
+        while (guard < 200) {
+            guard++
+            val line = head + t + (if (more) "..." else "") + "\""
+            if (t.isEmpty() || paint.measureText(line) <= maxW) return line
+            more = true
+            val sp = t.lastIndexOf(' ')
+            t = if (sp > 0) t.substring(0, sp) else dropBrokenEnd(t.substring(0, t.length - 1))
+        }
+        return head + "...\""
+    }
+
     /** Saves one picture (in one or more parts). An empty list means it failed. */
-    private fun exportPicture(src: File, conv: Int, img: Int, folder: String): List<Pair<String, SavedFile>> {
-        val result = ArrayList<Pair<String, SavedFile>>()
+    private fun exportPicture(src: File, msg: Int, img: Int, total: Int, words: Words, folder: String, stamp: String): List<SavedPart> {
+        val result = ArrayList<SavedPart>()
         var source: PictureSource? = null
         var complete = false
         try {
@@ -207,17 +294,19 @@ class AiExport(private val ctx: Context, private val store: Store) {
 
             val s = PictureSource(src, w, h, type)
             source = s
-            val ranges = computeRanges(s, w, h)
+            val ranges = computeRanges(s, w, h, sample)
             val n = ranges.size
             for (i in 0 until n) {
                 val name = if (n == 1) {
-                    String.format(Locale.US, "Conv%02d_Image%d.%s", conv, img, ext)
+                    String.format(Locale.US, "Message%02d_Picture%d_%s.%s", msg, img, stamp, ext)
                 } else {
-                    String.format(Locale.US, "Conv%02d_Image%d_part%dof%d.%s", conv, img, i + 1, n, ext)
+                    String.format(Locale.US, "Message%02d_Picture%d_part%dof%d_%s.%s", msg, img, i + 1, n, stamp, ext)
                 }
-                val saved = savePart(s, ranges[i][0], ranges[i][1], sample, conv, img, i + 1, n, name, mime, lossy, folder)
+                // Rows at the top of this part that are also at the end of the part before it.
+                val overlap = if (i == 0) 0 else s.overlapRows(ranges[i - 1][1], ranges[i][0], sample)
+                val saved = savePart(s, ranges[i][0], ranges[i][1], sample, msg, img, total, i + 1, n, overlap, words, name, mime, lossy, folder)
                     ?: return result
-                result.add(Pair(name, saved))
+                result.add(saved)
             }
             complete = true
             return result
@@ -229,20 +318,21 @@ class AiExport(private val ctx: Context, private val store: Store) {
             source?.close()
             if (!complete) {
                 // Never leave half of a picture behind.
-                for (r in result) SaveUtil.delete(ctx, r.second)
+                for (r in result) SaveUtil.delete(ctx, r.file)
                 result.clear()
             }
         }
     }
 
     /** Where a picture is cut: a list of [top, bottom) rows. A normal picture gives one range. */
-    private fun computeRanges(s: PictureSource, w: Int, h: Int): List<IntArray> {
+    private fun computeRanges(s: PictureSource, w: Int, h: Int, sample: Int): List<IntArray> {
         val out = ArrayList<IntArray>()
         if (h <= w * MAX_RATIO) {
             out.add(intArrayOf(0, h))
             return out
         }
-        val rows = partRows(w)
+        // Whole steps of `sample`, so the repeated strip is a whole number of saved rows.
+        val rows = maxOf(sample, partRows(w) / sample * sample)
         var top = 0
         var guard = 0
         while (h - top > rows * 5 / 4 && guard < 300) {
@@ -256,7 +346,7 @@ class AiExport(private val ctx: Context, private val store: Store) {
             } else {
                 // No empty gap here: repeat a small strip in the next part.
                 out.add(intArrayOf(top, maxCut))
-                top = maxCut - minOf(120, rows / 5)
+                top = maxCut - minOf(120, rows / 5) / sample * sample
             }
         }
         out.add(intArrayOf(top, h))
@@ -264,17 +354,17 @@ class AiExport(private val ctx: Context, private val store: Store) {
     }
 
     private fun savePart(
-        s: PictureSource, top: Int, bottom: Int, sample: Int, conv: Int, img: Int, part: Int, parts: Int,
-        name: String, mime: String, lossy: Boolean, folder: String
-    ): SavedFile? {
+        s: PictureSource, top: Int, bottom: Int, sample: Int, msg: Int, img: Int, total: Int, part: Int, parts: Int,
+        overlap: Int, words: Words, name: String, mime: String, lossy: Boolean, folder: String
+    ): SavedPart? {
         val bmp = s.decode(top, bottom, sample) ?: return null
         var out: Bitmap? = null
         try {
             val bw = bmp.width
             val bh = bmp.height
             val outW = maxOf(bw, MIN_W)
-            val line1 = "Conversation " + conv + " - Image " + img + (if (parts > 1) " (part $part of $parts)" else "")
-            val line2 = "কথোপকথন " + HtmlCodec.bn(conv) + "-এর ছবি " + HtmlCodec.bn(img) +
+            val line1 = "Picture $img of $total for MY MESSAGE $msg" + (if (parts > 1) " (part $part of $parts)" else "")
+            val line2 = "আমার মেসেজ " + HtmlCodec.bn(msg) + "-এর ছবি " + HtmlCodec.bn(img) + " (মোট " + HtmlCodec.bn(total) + "টা)" +
                 (if (parts > 1) " (অংশ " + HtmlCodec.bn(part) + " / " + HtmlCodec.bn(parts) + ")" else "")
             val paint = Paint(Paint.ANTI_ALIAS_FLAG)
             paint.typeface = Typeface.DEFAULT_BOLD
@@ -285,7 +375,13 @@ class AiExport(private val ctx: Context, private val store: Store) {
                 ts *= 0.93f
                 paint.textSize = ts
             }
-            val stripH = (ts * 2.9f).toInt()
+            val small = Paint(Paint.ANTI_ALIAS_FLAG)
+            small.typeface = Typeface.DEFAULT
+            small.color = Color.BLACK
+            small.textSize = ts * 0.82f
+            val line3 = wordsLine(words, msg, small, outW * 0.94f)
+
+            val stripH = (ts * 4.0f).toInt()
             val o = Bitmap.createBitmap(outW, stripH + bh, Bitmap.Config.ARGB_8888)
             out = o
             val c = Canvas(o)
@@ -298,8 +394,10 @@ class AiExport(private val ctx: Context, private val store: Store) {
             val pad = outW * 0.03f
             c.drawText(line1, pad, ts * 1.15f, paint)
             c.drawText(line2, pad, ts * 2.35f, paint)
+            c.drawText(line3, pad, ts * 3.45f, small)
             // The picture itself goes under the strip, untouched.
-            c.drawBitmap(bmp, (outW - bw) / 2f, stripH.toFloat(), null)
+            val left = (outW - bw) / 2
+            c.drawBitmap(bmp, left.toFloat(), stripH.toFloat(), null)
 
             val pending = SaveUtil.open(ctx, name, mime, folder) ?: return null
             var ok = false
@@ -314,7 +412,9 @@ class AiExport(private val ctx: Context, private val store: Store) {
             } catch (e: Exception) {
                 ok = false
             }
-            return SaveUtil.finish(ctx, pending, ok)
+            val saved = SaveUtil.finish(ctx, pending, ok) ?: return null
+            val ov = if (overlap < 0) 0 else minOf(overlap, bh - 1)
+            return SavedPart(PicturePart(name, stripH, left, bw, bh, ov), saved)
         } finally {
             out?.recycle()
             if (!s.isShared(bmp)) bmp.recycle()
@@ -375,6 +475,17 @@ class AiExport(private val ctx: Context, private val store: Store) {
             } catch (e: OutOfMemoryError) {
                 null
             }
+        }
+
+        /** How many saved rows at the top of a part repeat the end of the part before it. */
+        fun overlapRows(prevBottom: Int, top: Int, sample: Int): Int {
+            if (prevBottom <= top) return 0
+            if (region != null) return (prevBottom - top) / sample
+            val f = full ?: return 0
+            val k = f.height.toFloat() / h
+            val t = (top * k).toInt().coerceIn(0, f.height - 1)
+            val pb = Math.ceil((prevBottom * k).toDouble()).toInt().coerceIn(1, f.height)
+            return maxOf(0, pb - t)
         }
 
         fun isShared(b: Bitmap): Boolean = b === full
